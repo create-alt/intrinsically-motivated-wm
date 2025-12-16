@@ -1,0 +1,122 @@
+[project]
+name = "dreamer"
+version = "3.3.1"
+description = "Mastering Diverse Domains through World Models"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [
+    {name = "Danijar Hafner", email = "mail@danijar.com"}
+]
+keywords = ["reinforcement learning", "world models", "dreamer", "jax"]
+classifiers = [
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+# Core dependencies (always required)
+dependencies = [
+    "jax[cuda12]==0.4.33",
+    "ninjax>=3.5.1",
+    "numpy<2",  # DMLab: <2, MineRLv1.0: <1.24
+    "chex",
+    "optax",
+    "einops",
+    "jaxtyping",
+    "elements>=3.19.1",
+    "granular>=0.20.3",
+    "portal>=3.5.0",
+    "scope>=0.4.4",
+    "tqdm",
+    "google-resumable-media>=2.7.2",
+    "colored_traceback",
+    "ipdb",
+    "av",
+]
+
+[project.optional-dependencies]
+# Atari Learning Environment
+atari = [
+    "ale_py==0.9.0",
+    "autorom[accept-rom-license]==0.6.1",
+]
+
+# DeepMind Control Suite
+dmc = [
+    "dm_control",
+]
+
+# Crafter environment
+crafter = [
+    "crafter",
+]
+
+# Procgen environment
+procgen = [
+    "procgen_mirror",
+]
+
+# BSuite environment
+bsuite = [
+    "bsuite",
+]
+
+# Memory Maze environment
+memory_maze = [
+    "memory_maze",
+]
+
+# Minecraft environment (requires special binary installation)
+minecraft = [
+    # Note: Requires custom wheel installation
+    # pip install https://github.com/danijar/minerl/releases/download/v0.4.4-patched/minerl_mirror-0.4.4-cp311-cp311-linux_x86_64.whl
+]
+
+# DMLab environment (requires special installation script)
+dmlab = [
+    # Note: Requires custom installation script
+    # wget -O - https://gist.githubusercontent.com/danijar/ca6ab917188d2e081a8253b3ca5c36d3/raw/install-dmlab.sh | sh
+]
+
+# All standard environments (those installable via PyPI)
+all = [
+    "ale_py==0.9.0",
+    "autorom[accept-rom-license]==0.6.1",
+    "dm_control",
+    "crafter",
+    "procgen_mirror",
+    "bsuite",
+    "memory_maze",
+]
+
+# Development dependencies
+dev = [
+    "pytest",
+    "pytest-xdist",
+]
+
+# CUDA development tools (x86_64 only, needed for custom CUDA compilation)
+cuda-dev = [
+    "nvidia-cuda-nvcc-cu12<=12.2",
+]
+
+[project.urls]
+Homepage = "http://github.com/danijar/dreamerv3"
+Repository = "http://github.com/danijar/dreamerv3"
+Documentation = "https://danijar.com/dreamerv3"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["dreamerv3", "embodied"]
+
+[tool.pytest.ini_options]
+testpaths = ["embodied/tests"]
+python_files = "test_*.py"
+python_classes = "Test*"
+python_functions = "test_*"

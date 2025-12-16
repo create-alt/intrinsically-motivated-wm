@@ -52,12 +52,67 @@ increases data efficiency.
 
 The code has been tested on Linux and Mac and requires Python 3.11+.
 
+## Installation with UV (Recommended)
+
+[UV](https://github.com/astral-sh/uv) is a fast Python package installer and resolver. It provides significantly faster installation times and better dependency resolution than traditional pip.
+
+### Install UV
+
+```sh
+# On macOS and Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Or with pip
+pip install uv
+```
+
+### Basic Installation
+
+Install DreamerV3 with core dependencies:
+
+```sh
+# Create virtual environment and install
+uv venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+uv pip install -e .
+```
+
+### Install with Environment Support
+
+Install with specific environment support using optional dependencies:
+
+```sh
+# Install with Atari support
+uv pip install -e ".[atari]"
+
+# Install with multiple environments
+uv pip install -e ".[atari,crafter,dmc]"
+
+# Install all standard environments
+uv pip install -e ".[all]"
+
+# Install with development tools
+uv pip install -e ".[all,dev]"
+```
+
+### Special Environments
+
+Some environments require additional installation steps beyond PyPI packages:
+
+**Minecraft**: Requires custom wheel installation
+```sh
+uv pip install -e "."
+uv pip install https://github.com/danijar/minerl/releases/download/v0.4.4-patched/minerl_mirror-0.4.4-cp311-cp311-linux_x86_64.whl
+```
+
+**DMLab**: Requires special installation script (see Dockerfile for details)
+
 ## Docker
 
 You can either use the provided `Dockerfile` that contains instructions or
 follow the manual instructions below.
 
-## Manual
+## Manual Installation (Traditional)
 
 Install [JAX][jax] and then the other dependencies:
 

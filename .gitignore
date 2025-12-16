@@ -5,3 +5,14 @@ __pycache__/
 *.egg-info
 MUJOCO_LOG.TXT
 ;
+
+# UV
+.venv/
+uv.lock
+
+# Environment variables
+.env
+.env.local
+
+log/
+wandb/
