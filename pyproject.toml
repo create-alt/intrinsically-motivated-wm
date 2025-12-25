@@ -31,17 +31,27 @@ dependencies = [
     "portal>=3.5.0",
     "scope>=0.4.4",
     "tqdm",
+    "wandb[media]",
     "google-resumable-media>=2.7.2",
     "colored_traceback",
     "ipdb",
     "av",
+    "ale_py>=0.10.0",
+    "autorom[accept-rom-license]>=0.6.1",
+    "gymnasium",
+    "setuptools",
+    "pytest",
+    "pytest-xdist",
+    "black[jupyter]",
+    "flake8",
+    "nbqa",
 ]
 
 [project.optional-dependencies]
 # Atari Learning Environment
 atari = [
-    "ale_py==0.9.0",
-    "autorom[accept-rom-license]==0.6.1",
+    "ale_py>=0.10.0",
+    "autorom[accept-rom-license]>=0.6.1",
 ]
 
 # DeepMind Control Suite
@@ -83,24 +93,13 @@ dmlab = [
 
 # All standard environments (those installable via PyPI)
 all = [
-    "ale_py==0.9.0",
-    "autorom[accept-rom-license]==0.6.1",
+    "ale_py>=0.10.0",
+    "autorom[accept-rom-license]>=0.6.1",
     "dm_control",
     "crafter",
     "procgen_mirror",
     "bsuite",
     "memory_maze",
-]
-
-# Development dependencies
-dev = [
-    "pytest",
-    "pytest-xdist",
-]
-
-# CUDA development tools (x86_64 only, needed for custom CUDA compilation)
-cuda-dev = [
-    "nvidia-cuda-nvcc-cu12<=12.2",
 ]
 
 [project.urls]

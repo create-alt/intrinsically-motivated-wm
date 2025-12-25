@@ -8,7 +8,7 @@ MUJOCO_LOG.TXT
 
 # UV
 .venv/
-uv.lock
+#uv.lock
 
 # Environment variables
 .env
@@ -16,3 +16,5 @@ uv.lock
 
 log/
 wandb/
+
+.jax_cache

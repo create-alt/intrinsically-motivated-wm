@@ -85,3 +85,29 @@ SEED=0
 ### その他の設定
 - 全設定: `dreamerv3/configs.yaml`
 - コマンドラインで上書き可能: `--batch_size 16`
+
+
+
+実行した操作：
+1. 現在のmainブランチを backup-main ブランチに保存
+2. mainブランチをコミット 83271ee (Merge branch 'start_exp' into main) に移動
+
+現在の状態：
+- mainブランチ：コミット 83271ee を指しています
+- backup-mainブランチ：元のmain（コミット 08b9d29）を保持しています
+
+今後の作業：
+このコミットから通常通り作業を開始できます。
+
+元に戻したい場合：
+# バックアップに戻す
+git reset --hard backup-main
+
+# または、バックアップブランチに切り替える
+git checkout backup-main
+
+バックアップが不要になったら：
+# バックアップブランチを削除
+git branch -D backup-main
+
+これでコミット 83271ee から安全に作業を開始できます！
