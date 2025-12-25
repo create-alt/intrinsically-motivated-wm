@@ -29,6 +29,71 @@ s_i^ℓ ≤ τ
 学習の進行に伴って **τ-休眠ニューロンの数が継続的に増加** する場合、
 そのアルゴリズムは dormant neuron phenomenon を示す、と定義する。
 
+
+### 実装仕様
+
+#### 実装仕様の要点
+
+- 定義/算出方法: dreamerv3/dormant.py で、層
+    内の各特徴の平均絶対活性を計算し、層平均と
+    の差で正規化したスコア s_i = mean_abs_i /
+    (layer_mean + 1e-8) を用いて s_i <= tau の
+    比率を休眠率として算出。
+  - サンプル次元: mean_abs_activation は
+    bdims（先頭のバッチ次元数）をサンプルとし
+    て扱い、残り次元を特徴次元にフラット化。
+    agent.report() では bdims=2（B, T）で評
+    価。
+  - 集約指標: aggregate_metrics は複数層の
+    mean_abs を単純連結して休眠率を算出（層ご
+    との休眠率の平均ではない）。
+  - 無効入力の扱い: None、ndim <= bdims、サン
+    プル数 0 の場合はスキップ（該当レイヤはメ
+    トリクスに出ない）。
+
+#### 計測対象とメトリクス名
+
+- World Model 系: agent.report() 内で
+    outs["tokens"], repfeat["deter"],
+    repfeat["stoch"] を対象。
+  - Decoder 特徴: dreamerv3/rssm.Decoder に
+    return_features=True を追加し、vec/img の
+    中間特徴を取得。
+  - Reward/Continue Head: embodied/jax/
+    heads.py で MLPHead(...,
+    return_layers=True) を許可、embodied/jax/
+    nets.py の MLP から各隠れ層の出力を取得。
+  - Actor/Critic: policy と value の MLP 隠れ
+    層出力を同様に取得。
+  - メトリクス名: すべて dormant/<name> で出
+    力。主な集約は dormant/world_all, dormant/
+    world_penultimate, dormant/actor_all,
+    レイヤ別は dormant/world_tokens, dormant/
+    world_deter, dormant/world_stoch, dormant/
+    world_dec_vec, dormant/world_dec_img,
+    dormant/world_rew_layer{i}, dormant/
+    world_con_layer{i}, dormant/
+    actor_layer{i}, dormant/critic_layer{i} な
+    ど。
+
+#### 設定/既定値
+
+- dreamerv3/configs.yaml に dormant:
+    {enable: False, tau: 0.025} を追加。デフォ
+    ルトは無効で report() 時のみ計測。
+
+  テスト
+
+  - embodied/tests/test_dormant.py が休眠率の
+    基本計算と集約計算をカバー。
+
+  補足（仕様ドキュメント）
+
+  - docs/dormat.md に論文定義（層内正規化スコ
+    アと τ-休眠定義）が明記され、実装はこの定
+    義に沿う。
+
+
 ## torch版実装
 
 ```python
