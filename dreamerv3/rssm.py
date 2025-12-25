@@ -301,11 +301,12 @@ class Decoder(nj.Module):
     def truncate(self, entries, carry=None):
         return {}
 
-    def __call__(self, carry, feat, reset, training, single=False):
+    def __call__(self, carry, feat, reset, training, single=False, return_features=False):
         assert feat["deter"].shape[-1] % self.bspace == 0
         K = self.kernel
         recons = {}
         bshape = reset.shape
+        features = {}
         inp = [nn.cast(feat[k]) for k in ("stoch", "deter")]
         inp = [x.reshape((math.prod(bshape), -1)) for x in inp]
         inp = jnp.concatenate(inp, -1)
@@ -317,6 +318,8 @@ class Decoder(nj.Module):
             kw = dict(**self.kw, act=self.act, norm=self.norm)
             x = self.sub("mlp", nn.MLP, self.layers, self.units, **kw)(inp)
             x = x.reshape((*bshape, *x.shape[1:]))
+            if return_features:
+                features["vec"] = x
             kw = dict(**self.kw, outscale=self.outscale)
             outs = self.sub("vec", embodied.jax.DictHead, spaces, outputs, **kw)(x)
             recons.update(outs)
@@ -353,15 +356,23 @@ class Decoder(nj.Module):
                     x = self.sub(f"conv{i}", nn.Conv2D, depth, K, **self.kw)(x)
                 x = nn.act(self.act)(self.sub(f"conv{i}norm", nn.Norm, self.norm)(x))
             if self.outer:
+                img_inp = x
+                if return_features:
+                    features["img"] = img_inp.reshape((*bshape, *img_inp.shape[1:]))
                 kw = dict(**self.kw, outscale=self.outscale)
-                x = self.sub("imgout", nn.Conv2D, self.imgdep, K, **kw)(x)
+                x = self.sub("imgout", nn.Conv2D, self.imgdep, K, **kw)(img_inp)
             elif self.strided:
+                img_inp = x
+                if return_features:
+                    features["img"] = img_inp.reshape((*bshape, *img_inp.shape[1:]))
                 kw = dict(**self.kw, outscale=self.outscale, transp=True)
-                x = self.sub("imgout", nn.Conv2D, self.imgdep, K, 2, **kw)(x)
+                x = self.sub("imgout", nn.Conv2D, self.imgdep, K, 2, **kw)(img_inp)
             else:
-                x = x.repeat(2, -2).repeat(2, -3)
+                img_inp = x.repeat(2, -2).repeat(2, -3)
+                if return_features:
+                    features["img"] = img_inp.reshape((*bshape, *img_inp.shape[1:]))
                 kw = dict(**self.kw, outscale=self.outscale)
-                x = self.sub("imgout", nn.Conv2D, self.imgdep, K, **kw)(x)
+                x = self.sub("imgout", nn.Conv2D, self.imgdep, K, **kw)(img_inp)
             x = jax.nn.sigmoid(x)
             x = x.reshape((*bshape, *x.shape[1:]))
             split = np.cumsum([self.obs_space[k].shape[-1] for k in self.imgkeys][:-1])
@@ -371,4 +382,6 @@ class Decoder(nj.Module):
                 recons[k] = out
 
         entries = {}
+        if return_features:
+            entries["features"] = features
         return carry, entries, recons

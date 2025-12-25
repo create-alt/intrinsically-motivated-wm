@@ -47,6 +47,8 @@ nohup python dreamerv3/main.py \
     --run.train_ratio 128 \
     --logdir ${LOG_DIR} \
     --seed 0 \
+    --agent.dormant.enable True \
+    --agent.dormant.tau 0.025 \
     --jax.platform cuda \
     --logger.outputs jsonl,wandb \
     > ${LOG_DIR}.log 2>&1 &

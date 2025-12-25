@@ -10,6 +10,7 @@ import ninjax as nj
 import numpy as np
 import optax
 
+from . import dormant
 from . import rssm
 
 f32 = jnp.float32
@@ -188,7 +189,7 @@ class Agent(embodied.jax.Agent):
         carry = (*carry, {k: data[k][:, -1] for k in self.act_space})
         return carry, outs, metrics
 
-    def loss(self, carry, obs, prevact, training):
+    def loss(self, carry, obs, prevact, training, return_features=False):
         enc_carry, dyn_carry, dec_carry = carry
         reset = obs["is_first"]
         B, T = reset.shape
@@ -202,7 +203,9 @@ class Agent(embodied.jax.Agent):
         )
         losses.update(los)
         metrics.update(mets)
-        dec_carry, dec_entries, recons = self.dec(dec_carry, repfeat, reset, training)
+        dec_carry, dec_entries, recons = self.dec(
+            dec_carry, repfeat, reset, training, return_features=return_features
+        )
         inp = sg(self.feat2tensor(repfeat), skip=self.config.reward_grad)
         losses["rew"] = self.rew(inp, 2).loss(obs["reward"])
         con = f32(~obs["is_terminal"])
@@ -287,6 +290,8 @@ class Agent(embodied.jax.Agent):
         carry = (enc_carry, dyn_carry, dec_carry)
         entries = (enc_entries, dyn_entries, dec_entries)
         outs = {"tokens": tokens, "repfeat": repfeat, "losses": losses}
+        if return_features:
+            outs["decfeat"] = dec_entries.get("features", {})
         return loss, (carry, entries, outs, metrics)
 
     def report(self, carry, data):
@@ -301,7 +306,7 @@ class Agent(embodied.jax.Agent):
 
         # Train metrics
         _, (new_carry, entries, outs, mets) = self.loss(
-            carry, obs, prevact, training=False
+            carry, obs, prevact, training=False, return_features=self.config.dormant.enable
         )
         mets.update(mets)
 
@@ -316,6 +321,61 @@ class Agent(embodied.jax.Agent):
                     metrics[f"gradnorm/{key}"] = optax.global_norm(grad)
                 except KeyError:
                     print(f"Skipping gradnorm summary for missing loss: {key}")
+
+        if self.config.dormant.enable:
+            tau = self.config.dormant.tau
+            bdims = 2
+            repfeat = outs["repfeat"]
+            world_means = []
+            world_penultimate_means = []
+            actor_means = []
+            critic_means = []
+
+            def add_metric(name, tensor, target_means, penultimate=False):
+                mean_abs = dormant.mean_abs_activation(tensor, bdims)
+                if mean_abs is None:
+                    return
+                metrics[f"dormant/{name}"] = dormant.dormant_ratio(mean_abs, tau)
+                target_means.append(mean_abs)
+                if penultimate:
+                    world_penultimate_means.append(mean_abs)
+
+            add_metric("world_tokens", outs["tokens"], world_means)
+            add_metric("world_deter", repfeat["deter"], world_means)
+            add_metric("world_stoch", repfeat["stoch"], world_means)
+            decfeat = outs.get("decfeat", {})
+            if "vec" in decfeat:
+                add_metric("world_dec_vec", decfeat["vec"], world_means, penultimate=True)
+            if "img" in decfeat:
+                add_metric("world_dec_img", decfeat["img"], world_means, penultimate=True)
+
+            inp = self.feat2tensor(repfeat)
+            _, rew_layers = self.rew(inp, 2, return_layers=True)
+            for idx, layer in enumerate(rew_layers):
+                add_metric(f"world_rew_layer{idx}", layer, world_means, penultimate=True)
+            _, con_layers = self.con(inp, 2, return_layers=True)
+            for idx, layer in enumerate(con_layers):
+                add_metric(f"world_con_layer{idx}", layer, world_means, penultimate=True)
+
+            _, pol_layers = self.pol(inp, 2, return_layers=True)
+            for idx, layer in enumerate(pol_layers):
+                add_metric(f"actor_layer{idx}", layer, actor_means)
+            _, val_layers = self.val(inp, 2, return_layers=True)
+            for idx, layer in enumerate(val_layers):
+                add_metric(f"critic_layer{idx}", layer, critic_means)
+
+            world_all = dormant.aggregate_metrics(world_means, tau)
+            if world_all is not None:
+                metrics["dormant/world_all"] = world_all
+            world_penultimate = dormant.aggregate_metrics(world_penultimate_means, tau)
+            if world_penultimate is not None:
+                metrics["dormant/world_penultimate"] = world_penultimate
+            actor_all = dormant.aggregate_metrics(actor_means, tau)
+            if actor_all is not None:
+                metrics["dormant/actor_all"] = actor_all
+            critic_all = dormant.aggregate_metrics(critic_means, tau)
+            if critic_all is not None:
+                metrics["dormant/critic_all"] = critic_all
 
         # Open loop
         firsthalf = lambda xs: jax.tree.map(lambda x: x[:RB, : T // 2], xs)
