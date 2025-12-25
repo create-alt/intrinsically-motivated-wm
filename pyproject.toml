@@ -45,6 +45,12 @@ dependencies = [
     "black[jupyter]",
     "flake8",
     "nbqa",
+    "jupyter",
+    "jupyterlab",
+    "ipykernel",
+    "notebook",
+    "transformers",
+    "flax",
 ]
 
 [project.optional-dependencies]
