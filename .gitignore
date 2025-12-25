@@ -8,7 +8,7 @@ MUJOCO_LOG.TXT
 
 # UV
 .venv/
-uv.lock
+#uv.lock
 
 # Environment variables
 .env
