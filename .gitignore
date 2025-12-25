@@ -16,5 +16,6 @@ MUJOCO_LOG.TXT
 
 log/
 wandb/
+notebooks/images
 
 .jax_cache
