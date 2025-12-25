@@ -1,11 +1,13 @@
-# DreamerV3：リプレイバッファのサンプリングを「類似度優先」にする実装まとめ（コード無し）
+# DreamerV3：リプレイバッファのサンプリングを「類似度優先」にする実装まとめ（CLIP統一版）
 
 ## ゴール
 DreamerV3の学習手順（world model / actor / critic、online queue 混合など）は維持しつつ、**Replay Buffer からのサンプリング確率だけ**を変更する。
 
-- 画像↔画像の類似度：**DINOv2**
-- 画像↔言語の類似度：**CLIP / OpenCLIP**
+- 画像↔画像の類似度：**CLIP**（JAX/Flax実装: FlaxCLIPModel）
+- 画像↔言語の類似度：**CLIP**（JAX/Flax実装: FlaxCLIPModel）
 - cos類似度からスコア → priority → サンプル確率を作り、Replayから引かれる頻度（期待値）を変える。
+
+> 📌 **変更点**: 従来のDINOv2（画像↔画像）+ CLIP（画像↔言語）の構成から、CLIPに統一。これによりモデル数が1つで済み、実装が簡潔になる。
 
 ---
 
@@ -45,18 +47,18 @@ DreamerV3の学習手順（world model / actor / critic、online queue 混合な
 - すべての埋め込みは **L2正規化**しておく（cosine = 内積）
 - `pos`（注目すべき / 成功 / 学びたい）と `neg`（noisy TV / 注目しない）は「参照バンク」として複数ベクトル（K個）を持てる。
 
-### 3.1 画像↔画像（DINOv2）
-- 観測画像 → DINOv2 → `e_img`（正規化）
+### 3.1 画像↔画像（CLIP）
+- 観測画像 → CLIP image encoder → `e_img`（L2正規化）
 - 参照：`pos_bank`（成功画像の埋め込み集合）、任意で `neg_bank`
 - score（例）：
   - posのみ：`score = max_k cos(e_img, pos_bank[k])`
   - pos-neg差分：`score = relu(max cos(e_img,pos_bank) - max cos(e_img,neg_bank))`
 
-### 3.2 画像↔言語（CLIP / OpenCLIP）
-- 観測画像 → CLIP image encoder → `e_img`（正規化）
+### 3.2 画像↔言語（CLIP）
+- 観測画像 → CLIP image encoder → `e_img`（L2正規化）
 - テキストは開始時に一度だけエンコードして固定：
-  - `t_pos = CLIP_text(prompt_pos)`（正規化）
-  - `t_neg = CLIP_text(prompt_neg)`（任意、正規化）
+  - `t_pos = CLIP_text(prompt_pos)`（L2正規化）
+  - `t_neg = CLIP_text(prompt_neg)`（任意、L2正規化）
 - score（例）：
   - posのみ：`score = cos(e_img, t_pos)`
   - pos-neg差分：`score = relu(cos(e_img,t_pos) - cos(e_img,t_neg))`
@@ -89,8 +91,8 @@ DreamerV3の学習手順（world model / actor / critic、online queue 混合な
 ### 5.1 手動（導入が簡単）
 - pos_bank：成功状態の画像を少数与える（あるいは成功っぽい画像）
 - neg_bank：noisy TV/無関係背景の画像（またはテキストprompt）
-- 画像の場合はDINOv2で埋め込み化して保存
-- テキストの場合はCLIPで埋め込み化して保存
+- 画像の場合はCLIPで埋め込み化して保存
+- テキストの場合もCLIPで埋め込み化して保存（同一モデル）
 
 ### 5.2 自己生成（リークが少なくRLらしい）
 - pos_bank：過去の経験から高return chunkの代表フレームを集める
@@ -103,7 +105,7 @@ DreamerV3の学習手順（world model / actor / critic、online queue 混合な
 
 ## 6. 実装上の速度・安定性の要点
 ### 6.1 速度を落とさない原則
-- 埋め込み計算（DINO/CLIP）は重いので、**chunk追加時に1回だけ**計算してキャッシュする。
+- 埋め込み計算（CLIP）は重いので、**chunk追加時に1回だけ**計算してキャッシュする。
 - 学習時は基本「prioに基づく抽選」だけにする（cos類似度再計算はしない）。
 - Replayの抽選は、最初は簡単実装（O(N)）でも動くが、大規模なら
   - SumTree / SegmentTree / Alias法などで高速化する。
@@ -115,24 +117,80 @@ DreamerV3の学習手順（world model / actor / critic、online queue 混合な
 
 ---
 
-## 7. 使うライブラリ（推奨）
-### 7.1 DINOv2（画像↔画像）
-- 推奨：**Hugging Face Transformers**
-  - 前処理（リサイズ・正規化）とモデルI/Fが揃っており、RL統合が楽。
-- 代替：公式repo（torch.hub）
-  - 原典に近いが前処理/出力の合わせ込みが増えがち。
+## 7. 使うライブラリ（JAX/Flax実装）
+### 7.1 CLIP（画像・言語 統一）
+- 推奨：**Hugging Face Transformers（FlaxCLIPModel）**
+  - JAX/Flax ネイティブ実装
+  - `CLIPProcessor` で前処理が簡潔
+  - 画像・テキスト両方を同一モデルで処理可能
 
-### 7.2 CLIP（画像↔言語）
-- 推奨：**OpenCLIP（open_clip）**
-  - 多様な事前学習重みがあり、モデルサイズ比較が容易。
-- 代替：Hugging Face Transformers（CLIPModel/Processor）
-  - I/Fを統一したい場合に有利。
+```python
+from transformers import CLIPProcessor, FlaxCLIPModel
+
+# モデル・プロセッサのロード
+model = FlaxCLIPModel.from_pretrained("openai/clip-vit-base-patch32")
+processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
+```
 
 ---
 
-## 8. 推奨の最小構成（まず動かす）
-- DINOv2（画像↔画像）で開始（安定＆軽い）
+## 8. 主要な関数実装（JAX/Flax）
+
+### 8.1 L2正規化
+```python
+def l2norm(x, axis=-1, eps=1e-6):
+    """L2正規化（cosine = 内積にするため）"""
+    return x / (jnp.linalg.norm(x, axis=axis, keepdims=True) + eps)
+```
+
+### 8.2 画像のエンコード
+```python
+def encode_images(model, processor, images, batch_size=16):
+    """画像リストをCLIP埋め込みに変換（L2正規化済み）"""
+    batches = []
+    for start in range(0, len(images), batch_size):
+        batch_images = [to_pil_image(img) for img in images[start:start + batch_size]]
+        inputs = processor(images=batch_images, return_tensors="np")
+        feats = model.get_image_features(**inputs)
+        feats = l2norm(feats)
+        batches.append(feats)
+    return jnp.concatenate(batches, axis=0)
+```
+
+### 8.3 テキストのエンコード
+```python
+def encode_texts(model, processor, texts):
+    """テキストリストをCLIP埋め込みに変換（L2正規化済み）"""
+    inputs = processor(text=texts, return_tensors="np", padding=True)
+    feats = model.get_text_features(**inputs)
+    return l2norm(feats)
+```
+
+### 8.4 コサイン類似度スコア
+```python
+def cosine_scores(image_embs, query_emb):
+    """画像埋め込みとクエリ（テキストor画像）の類似度"""
+    if query_emb.ndim == 1:
+        query_emb = query_emb[None, :]
+    scores = image_embs @ query_emb.T
+    return scores.squeeze(-1)
+```
+
+---
+
+## 9. 推奨の最小構成（まず動かす）
+- **CLIP**（画像↔画像 / 画像↔言語 両方）で開始
+  - モデル: `openai/clip-vit-base-patch32`（軽量＆高速）
 - 代表フレーム：chunk末尾1枚
 - `alpha=0.6, eps=1e-4, λ=0.2`
 - online queue混合は既存設定を維持
 - 比較：DreamerV3（既存） vs DreamerV3（replayのみ優先サンプル）
+
+---
+
+## 10. CLIPに統一したメリット
+1. **モデル数削減**: DINOv2 + CLIP → CLIP のみ
+2. **実装簡潔化**: 画像↔画像も画像↔言語も同じエンコーダ
+3. **メモリ効率**: GPU/TPUメモリ消費が減少
+4. **JAX互換**: FlaxCLIPModelでJAX環境にネイティブ対応
+5. **柔軟性**: テキストプロンプトで参照を定義可能（手動pos/neg作成が容易）
