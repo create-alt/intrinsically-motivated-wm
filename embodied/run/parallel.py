@@ -9,6 +9,8 @@ import embodied
 import numpy as np
 import portal
 
+from . import metrics as run_metrics
+
 prefix = lambda d, p: {f"{p}/{k}": v for k, v in d.items()}
 
 
@@ -169,7 +171,7 @@ def parallel_learner(agent, barrier, args):
     def evaluate(stream):
         carry = agent.init_report(args.batch_size)
         agg = elements.Agg()
-        for _ in range(args.consec_report * args.report_batches):
+        for _ in range(report_batches):
             batch = next(stream)
             carry, metrics = agent.report(carry, batch)
             agg.add(metrics)
@@ -185,6 +187,8 @@ def parallel_learner(agent, barrier, args):
         agent.stream(embodied.streams.Stateless(parallel_stream("eval")))
     )
     carry = agent.init_train(args.batch_size)
+    carry_report = agent.init_report(args.batch_size)
+    report_batches = int(args.consec_report * args.report_batches)
 
     while True:
 
@@ -200,15 +204,33 @@ def parallel_learner(agent, barrier, args):
         agg.add(mets)
         fps.step(batch_steps)
 
+        report_ran = False
+        dormant_from_report = {}
         if should_report(skip=not received["report"]):
             print("Report started...")
             with elements.timer.section("report"):
-                logger.add(prefix(evaluate(stream_report), "report"))
+                dormant_metrics, report_metrics = run_metrics.split_dormant_metrics(
+                    evaluate(stream_report)
+                )
+                if report_metrics:
+                    logger.add(prefix(report_metrics, "report"))
+                if dormant_metrics:
+                    report_ran = True
+                    dormant_from_report = dormant_metrics
                 if args.eval_envs and received["eval"]:
                     logger.add(prefix(evaluate(stream_eval), "eval"))
             print("Report finished!")
 
         if should_log():
+            if run_metrics.dormant_enabled(agent) and received["report"]:
+                if report_ran and dormant_from_report:
+                    logger.add(dormant_from_report)
+                else:
+                    carry_report, dormant_metrics = run_metrics.collect_dormant_metrics(
+                        agent, carry_report, stream_report, report_batches
+                    )
+                    if dormant_metrics:
+                        logger.add(dormant_metrics)
             with elements.timer.section("metrics"):
                 stats = {}
                 stats["fps/train"] = fps.result()

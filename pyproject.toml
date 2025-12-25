@@ -51,6 +51,7 @@ dependencies = [
     "notebook",
     "transformers",
     "flax",
+    "zerofun",
 ]
 
 [project.optional-dependencies]
