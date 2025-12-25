@@ -44,6 +44,7 @@ echo "" >> ${LOG_DIR}.log
 nohup python dreamerv3/main.py \
     --configs atari100k \
     --task atari100k_seaquest \
+    --run.train_ratio 128 \
     --logdir ${LOG_DIR} \
     --seed 0 \
     --jax.platform cuda \

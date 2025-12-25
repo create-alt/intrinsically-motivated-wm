@@ -5,6 +5,8 @@ import elements
 import embodied
 import numpy as np
 
+from . import metrics as run_metrics
+
 
 def train_eval(
     make_agent,
@@ -93,6 +95,7 @@ def train_eval(
     carry_train = [agent.init_train(args.batch_size)]
     carry_report = agent.init_report(args.batch_size)
     carry_eval = agent.init_report(args.batch_size)
+    report_batches = int(args.report_batches)
 
     def trainfn(tran, worker):
         if len(replay_train) < args.batch_size * args.batch_length:
@@ -110,7 +113,7 @@ def train_eval(
 
     def reportfn(carry, stream):
         agg = elements.Agg()
-        for _ in range(args.report_batches):
+        for _ in range(report_batches):
             batch = next(stream)
             carry, mets = agent.report(carry, batch)
             agg.add(mets)
@@ -135,6 +138,8 @@ def train_eval(
     driver_train.reset(agent.init_policy)
     while step < args.steps:
 
+        report_ran = False
+        dormant_from_report = {}
         if should_report(step):
             print("Evaluation")
             driver_eval.reset(agent.init_policy)
@@ -142,7 +147,14 @@ def train_eval(
             logger.add(eval_epstats.result(), prefix="epstats")
             if len(replay_train):
                 carry_report, mets = reportfn(carry_report, stream_report)
-                logger.add(mets, prefix="report")
+                dormant_metrics, report_metrics = run_metrics.split_dormant_metrics(
+                    mets
+                )
+                if report_metrics:
+                    logger.add(report_metrics, prefix="report")
+                if dormant_metrics:
+                    report_ran = True
+                    dormant_from_report = dormant_metrics
             if len(replay_eval):
                 carry_eval, mets = reportfn(carry_eval, stream_eval)
                 logger.add(mets, prefix="eval")
@@ -150,6 +162,15 @@ def train_eval(
         driver_train(train_policy, steps=10)
 
         if should_log(step):
+            if run_metrics.dormant_enabled(agent) and len(replay_train):
+                if report_ran and dormant_from_report:
+                    logger.add(dormant_from_report)
+                else:
+                    carry_report, dormant_metrics = run_metrics.collect_dormant_metrics(
+                        agent, carry_report, stream_report, report_batches
+                    )
+                    if dormant_metrics:
+                        logger.add(dormant_metrics)
             logger.add(agg.result())
             logger.add(train_epstats.result(), prefix="epstats")
             logger.add(replay_train.stats(), prefix="replay")

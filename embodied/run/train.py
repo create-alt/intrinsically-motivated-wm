@@ -5,6 +5,8 @@ import elements
 import embodied
 import numpy as np
 
+from . import metrics as run_metrics
+
 
 def train(make_agent, make_replay, make_env, make_stream, make_logger, args):
 
@@ -69,6 +71,7 @@ def train(make_agent, make_replay, make_env, make_stream, make_logger, args):
 
     carry_train = [agent.init_train(args.batch_size)]
     carry_report = agent.init_report(args.batch_size)
+    report_batches = int(args.consec_report * args.report_batches)
 
     def trainfn(tran, worker):
         if len(replay) < args.batch_size * args.batch_length:
@@ -102,14 +105,32 @@ def train(make_agent, make_replay, make_env, make_stream, make_logger, args):
 
         driver(policy, steps=10)
 
+        report_ran = False
+        dormant_from_report = {}
         if should_report(step) and len(replay):
             agg = elements.Agg()
-            for _ in range(args.consec_report * args.report_batches):
+            for _ in range(report_batches):
                 carry_report, mets = agent.report(carry_report, next(stream_report))
                 agg.add(mets)
-            logger.add(agg.result(), prefix="report")
+            dormant_metrics, report_metrics = run_metrics.split_dormant_metrics(
+                agg.result()
+            )
+            if report_metrics:
+                logger.add(report_metrics, prefix="report")
+            if dormant_metrics:
+                report_ran = True
+                dormant_from_report = dormant_metrics
 
         if should_log(step):
+            if run_metrics.dormant_enabled(agent) and len(replay):
+                if report_ran and dormant_from_report:
+                    logger.add(dormant_from_report)
+                else:
+                    carry_report, dormant_metrics = run_metrics.collect_dormant_metrics(
+                        agent, carry_report, stream_report, report_batches
+                    )
+                    if dormant_metrics:
+                        logger.add(dormant_metrics)
             logger.add(train_agg.result())
             logger.add(epstats.result(), prefix="epstats")
             logger.add(replay.stats(), prefix="replay")

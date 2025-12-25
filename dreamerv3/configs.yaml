@@ -116,6 +116,7 @@ defaults:
     repval_grad: True
     report: True
     report_gradnorms: False
+    dormant: {enable: False, tau: 0.025}
 
 size1m: &size1m
   .*\.rssm: {deter: 512, hidden: 64, classes: 4}
