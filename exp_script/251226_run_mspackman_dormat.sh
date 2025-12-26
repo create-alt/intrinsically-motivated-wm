@@ -1,3 +1,4 @@
+
 #!/bin/bash
 
 cd /home/ist_baidoku/yoshinari.kawashima/wm25_final_homework/dreamerv3
@@ -14,8 +15,8 @@ fi
 source .venv/bin/activate
 
 # タイムスタンプ
-TIME_STR=$(date '+%Y_%m_%d_%H%M')
-LOG_DIR="log/dreamerV3_atari100_${TIME_STR}"
+TIME_STR=$(date '+%y%m%d%H%M')
+LOG_DIR="log/${TIME_STR}_dreamerV3_atari100k_ms_pacman"
 
 # ログディレクトリ作成
 mkdir -p ${LOG_DIR}
@@ -43,10 +44,12 @@ echo "" >> ${LOG_DIR}/log.log
 # nohupで実行
 nohup python dreamerv3/main.py \
     --configs atari100k \
-    --task atari100k_seaquest \
+    --task atari100k_ms_pacman \
     --run.train_ratio 128 \
     --logdir ${LOG_DIR} \
     --seed 0 \
+    --agent.dormant.enable True \
+    --agent.dormant.tau 0.025 \
     --jax.platform cuda \
     --logger.outputs jsonl,wandb \
     > ${LOG_DIR}/log.log 2>&1 &

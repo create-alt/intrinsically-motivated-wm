@@ -23,7 +23,7 @@ mkdir -p ${LOG_DIR}
 echo "=========================================="
 echo "Starting training in background"
 echo "Log directory: ${LOG_DIR}"
-echo "Log file: ${LOG_DIR}.log"
+echo "Log file: ${LOG_DIR}/log.log"
 echo "=========================================="
 echo ""
 
@@ -33,12 +33,12 @@ nvidia-smi
 echo ""
 
 # GPU情報をログファイルにも保存
-nvidia-smi > ${LOG_DIR}.log 2>&1
-echo "" >> ${LOG_DIR}.log
-echo "=========================================" >> ${LOG_DIR}.log
-echo "Training started at $(date)" >> ${LOG_DIR}.log
-echo "=========================================" >> ${LOG_DIR}.log
-echo "" >> ${LOG_DIR}.log
+nvidia-smi > ${LOG_DIR}/log.log 2>&1
+echo "" >> ${LOG_DIR}/log.log
+echo "=========================================" >> ${LOG_DIR}/log.log
+echo "Training started at $(date)" >> ${LOG_DIR}/log.log
+echo "=========================================" >> ${LOG_DIR}/log.log
+echo "" >> ${LOG_DIR}/log.log
 
 # nohupで実行
 nohup python dreamerv3/main.py \
@@ -49,17 +49,17 @@ nohup python dreamerv3/main.py \
     --seed 0 \
     --jax.platform cuda \
     --logger.outputs jsonl,wandb \
-    > ${LOG_DIR}.log 2>&1 &
+    > ${LOG_DIR}/log.log 2>&1 &
 
 PID=$!
 
 echo ""
 echo "✓ Training started successfully"
 echo "  PID: ${PID}"
-echo "  Log file: ${LOG_DIR}.log"
+echo "  Log file: ${LOG_DIR}/log.log"
 echo ""
 echo "Useful commands:"
-echo "  Monitor log:     tail -f ${LOG_DIR}.log"
+echo "  Monitor log:     tail -f ${LOG_DIR}/log.log"
 echo "  Check process:   ps aux | grep ${PID}"
 echo "  Stop training:   kill ${PID}"
 echo "=========================================="
