@@ -39,6 +39,7 @@ class Agent(embodied.jax.Agent):
         exclude = ("is_first", "is_last", "is_terminal", "reward")
         enc_space = {k: v for k, v in obs_space.items() if k not in exclude}
         dec_space = {k: v for k, v in obs_space.items() if k not in exclude}
+        self.dec_space = dec_space
         self.enc = {
             "simple": rssm.Encoder,
         }[
@@ -290,7 +291,7 @@ class Agent(embodied.jax.Agent):
         # World model losses: dyn, rep, rew, con, + reconstruction losses
         wm_loss_keys = ['dyn', 'rep', 'rew', 'con']
         # Add reconstruction losses (keys in dec_space, e.g., 'image')
-        wm_loss_keys += [k for k in dec_space.keys() if k in losses]
+        wm_loss_keys += [k for k in self.dec_space.keys() if k in losses]
         model_loss = sum(losses[k] for k in wm_loss_keys if k in losses)
         outs["model_loss"] = model_loss  # Shape: (B, T)
 
