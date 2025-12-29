@@ -1,163 +1,144 @@
-# Curious Replay：リプレイバッファからのサンプリング（実装向け）
+# Curious Replay（Kauvar et al., 2023）仕様（論文準拠）
 
-本論文の提案は「Prioritized Experience Replay (PER) の枠組み」を使いつつ、
-priority（優先度）を TD 誤差ではなく **“curiosity（不慣れさ/苦手さ）”** で定義して
-サンプリング分布を作る、というもの。
-
----
-
-## 1. 何を「experience」として優先度付けするか
-
-論文中では experience = **単一の遷移**（1-step transition）
-- `i` 番目の遷移: `(x_t, a_t, r_t, x_{t+1})`
-- visit count `v_i`: その遷移が **学習バッチに入った回数**（revisited 回数）
-
-※ Dreamer 系は実装上「シーケンス（連続した長さ H の区間）」をサンプルすることが多い。
-その場合でも、以下いずれかで整合を取れる：
-1) **遷移単位の priority を持ち**、サンプルは「開始インデックス i」を引く（i から H 区間を取り出す）
-2) シーケンス単位にまとめ、priority をシーケンス内遷移の `mean/max` などで定義する  
-   （論文の厳密さは 1) に近いが、実装都合で 2) も現実的）
+## 0. 目的と適用箇所
+- Curious Replay（CR）は **行動選択（exploration）ではなく**、Dreamer系の **world model 学習時にリプレイバッファから何をサンプルするか**を変える手法。
+- ねらいは「環境が変化した後に、world model が新しいデータを十分に学べず追従が遅い」問題に対して、
+  - (a) **まだ学習にあまり使っていない経験** と
+  - (b) **world model がまだうまく予測できていない経験**
+  を優先して world model を更新すること。
 
 ---
 
-## 2. バッファに保持するメタデータ（最小構成）
+## 1. 用語とデータ単位
+### 1.1 経験（experience）
+- 論文の基本定義では、experience は **単一の状態遷移（state transition）**（例： (o_t, a_t, r_t, o_{t+1}, done) ）を指す。
 
-固定容量 `N` のリプレイバッファをリングバッファとして持つとする。
+### 1.2 追跡するメタ情報（各 experience i に付与）
+- **再生回数（visit / replay count）**:  v_i  
+  - 「experience i が **学習バッチに含まれて world model 更新に使われた回数**」。
+- **優先度（priority）**: p_i  
+  - サンプリング確率を決めるスカラー。
 
-各スロット（遷移 i）に対して：
-- `data[i]`: 遷移データ（観測/行動/報酬/次観測 + 必要なら done 等）
-- `p[i]`: priority（>0 を保証）
-- `v[i]`: visit count（int, 初期 0）
-- （任意）`age[i]` や `timestamp`：不要（優先度式に含まれない）
-
-さらに、**SumTree**（セグメント木）を持つ：
-- 葉に `p[i]` を保持し、根に `sum(p)` を保持
-- `sample` と `update` を O(log N) で実行するため
-
----
-
-## 3. 優先度の定義（Count-based / Adversarial / Combined）
-
-### 3.1 Count-based priority（「まだ十分リプレイしていない」を優先）
-- ハイパーパラメータ：`β ∈ [0,1]`
-- 定義：
-  - `p_count(i) = β^(v_i)`
-
-性質：
-- `v_i=0` の新データは `1`
-- バッチに入るたび `v_i` が増えて指数的に減衰 → “まんべんなく再学習” を促す
-
-### 3.2 Adversarial priority（「世界モデルが苦手」を優先）
-- ハイパーパラメータ：`α ∈ [0,1]`, `ε > 0`
-- 各遷移 i に対して、その遷移での世界モデル損失 `L_i` を使い：
-  - `p_adv(i) = (|L_i| + ε)^α`
-
-注意（論文の実装方針）：
-- `L_i` は「その遷移が学習に使われた時」に計算し、
-  **priority 更新もその時だけ**行う（未サンプル遷移の priority は古いままでもOKという扱い）
-
-### 3.3 Curious Replay priority（Combined）
-- ハイパーパラメータ：`c > 0`（スケール係数）
-- 定義（論文の式(1)）：
-  - `p(i) = c * β^(v_i) + (|L_i| + ε)^α`
-
-直感：
-- **新しい（or あまり見てない）** → `c * β^(v_i)` が効く
-- **苦手（loss が大きい）** → `( |L_i|+ε )^α` が効く
-- 足し算で両方を同時に満たす方向へ寄せる
+### 1.3 world model 損失（Dreamerの場合）
+- Adversarial成分で使う損失 L は **world model を学習するときの損失**。
+- Dreamerでは論文中で次を使用：
+  - L = L_image + L_reward + L_KL
+- CRはこの L を experience 単位に割り当てる（バッチ学習時に、各 experience の損失をキャッシュして優先度更新に使う）。
 
 ---
 
-## 4. サンプリング分布（Replay buffer からどう引くか）
-
-リプレイバッファ内の全遷移（有効なスロット）について、
-- `P(i) = p(i) / Σ_j p(j)`
-
-これが「サンプリング確率」。
-
-SumTree を使うと：
-- `total = Σ_j p(j)` を根が持つ
-- `u ~ Uniform(0, total)` を引いて、累積和の位置で葉（= index i）を探索できる
+## 2. ハイパーパラメータ
+- β ∈ [0, 1] : count-based の減衰率（v_i が増えるほど β^{v_i} が小さくなる）
+- α ∈ [0, 1] : adversarial（損失ベース）優先度の鋭さ（α=0 なら一様）
+- ϵ > 0 : (|L|+ϵ) の安定化定数
+- c ≥ 0 : count-based 項のスケール係数（count-based と adversarial の相対重み）
+- E : environment steps per train step（環境相互作用 E ステップごとに学習を1回回す、という運用パラメータ）
+- B : 学習でサンプルするバッチサイズ
+- p_max : 新規 experience に付与する「最大優先度」（初期化用）
 
 ---
 
-## 5. アルゴリズム（学習ループに組み込む手順）
+## 3. リプレイバッファとサンプリング分布
+### 3.1 収納
+- バッファ容量を |R| とする（有限）。
+- 各 experience i を、(データ本体, v_i, p_i) として保持する。
 
-### 5.1 主要ハイパーパラメータ
-- `L_env_per_train`: 1回の学習イテレーションあたり環境から収集する遷移数（論文 Algorithm 1 の L）
-- `B`: バッチサイズ（サンプル遷移数）
-- `p_MAX`: 新規追加遷移の初期 priority（大きめ）
-- `c, β, α, ε`: 上記の式の係数
-
-### 5.2 1イテレーションの処理フロー（論文 Algorithm 1 準拠）
-1) 環境から `L_env_per_train` 個の遷移を収集
-2) 各遷移をリプレイバッファへ追加  
-   - `p[i] ← p_MAX`
-   - `v[i] ← 0`
-   - SumTree の該当 leaf を `p_MAX` に更新
-3) SumTree から `B` 個サンプル（確率 P(i) に従う）
-4) サンプルバッチで世界モデル＆方策を学習し、各遷移 i の損失 `L_i` を得る（キャッシュ）
-5) バッチ内の各遷移 i について priority 更新：
-   - `p[i] ← c * β^(v[i]) + (|L_i| + ε)^α`
-   - `v[i] ← v[i] + 1`
-   - SumTree の leaf を新しい `p[i]` に更新
+### 3.2 サンプリング確率
+- バッファからのサンプルは **優先度 p_i に比例**させる：
+  - P(i) = p_i / (Σ_j p_j)
+- 実装上は SumTree 等で正規化サンプリングを効率化する（論文では SumTree を用いる前提でアルゴリズムを書いている）。
 
 ---
 
-## 6. SumTree（実装の要点）
+## 4. 優先度の定義
+### 4.1 Count-based Replay（単体）
+- count-based の優先度は
+  - p_i = β^{v_i}
+- 意味：学習に使われた回数 v_i が少ない（新しい／まだ十分学習していない）経験ほど優先される。
 
-### 6.1 データ構造（典型）
-- `tree`: 長さ `2*N` の配列（1-indexed でも 0-indexed でもOK）
-  - 葉：`tree[base + i] = p[i]`
-  - 親：`tree[k] = tree[2k] + tree[2k+1]`
+### 4.2 Adversarial Replay（単体）
+- adversarial（損失ベース）の優先度は
+  - p_i = (|L_i| + ϵ)^{α}
+- 重要な更新規則：
+  - **優先度は “その経験を学習に使ったときだけ” 更新する**（全バッファを毎回再計算しない）。
+  - 新規 experience の優先度は **最大値で初期化**する（p_i ← p_max）。
 
-### 6.2 update(i, new_p)
-- `delta = new_p - old_p`
-- 葉から根へ向かって `tree[node] += delta` を伝播
-
-### 6.3 sample(u)
-- `node = root`
-- `while node is not leaf`:
-  - `if u <= left_sum: node = left`
-  - `else: u -= left_sum; node = right`
-- leaf に到達したら、その leaf が指す `i` を返す
-
----
-
-## 7. Loss L_i をどう作るか（Dreamer 系への落とし込み）
-
-論文では世界モデル損失として
-- `L = L_image + L_reward + L_KL`
-を用いる（Dreamer の world model 学習損失）。  
-実装上のポイントは「サンプル単位 i に L_i を割り当てられること」。
-
-### 7.1 遷移単位で学習している場合
-- そのまま `L_i` を計算して優先度更新に使う
-
-### 7.2 シーケンス（長さ H）で学習している場合（よくある）
-以下のどれかを選べる（どれも実装しやすい）：
-- (A) **時刻ごとの loss（per-step loss）** が取れるなら、それを各遷移 i に対応付け
-- (B) シーケンス損失 `L_seq` を、そのシーケンス内の全遷移に同じ値として割当（簡単）
-- (C) シーケンス開始点 i の priority として `L_seq` を使う（開始点サンプリング型）
-
-論文の “transition i ごとに loss をキャッシュして更新” に最も近いのは (A)。
+### 4.3 Curious Replay（Count + Adversarial の加算）
+- CR の最終優先度は加算で統合：
+  - p_i = c * β^{v_i} + (|L_i| + ϵ)^{α}
+- 直感：
+  - c * β^{v_i} が「未学習・新規データを押し上げる」
+  - (|L_i| + ϵ)^{α} が「難しい（モデルが外している）データを押し上げる」
 
 ---
 
-## 8. 実装上の注意・落とし穴
+## 5. 学習ループ仕様（Algorithm 1 相当）
+各 iteration で以下を繰り返す。
 
-- **priority は必ず正**：`ε > 0` を入れて 0 を避ける（特に α=0 のときも安定）
-- **新規データを強く優先**：追加時に `p_MAX` を与える（新データが早く学習に入る）
-- **priority の更新頻度**：未サンプル遷移は古い priority のまま（論文の簡略化方針）
-- **c のスケーリング**：
-  - `β^(v)` は最大 1 なので、`c` が小さいと count 項が効きにくい
-  - loss 項のスケールも環境・損失設計で変わるので、`c` は要調整
-- **with/without replacement**：
-  - 論文は明記していない。実装は with replacement（独立に B 回 sample）が楽
-  - 重複が嫌なら再サンプルで回避（ただし理論分布から少しズレる）
+### 5.1 環境相互作用（collect）
+- 現在のポリシーで環境から遷移を収集する（運用としては E ステップごとに学習へ進む）。
+
+### 5.2 バッファ追加（append）
+- 収集した各新規遷移 i について
+  - v_i ← 0
+  - p_i ← p_max（「最大優先度」で初期化）
+  - バッファへ追加（容量超過時は通常の方式で古いものから削除等。※論文は削除ポリシー自体は規定しない）
+
+### 5.3 サンプリング（sample）
+- 優先度に比例した確率 P(i) で、バッファから B 個の experience をサンプルする。
+
+### 5.4 学習（train）
+- サンプルしたバッチで Dreamer の通常手順どおり
+  - world model を更新し
+  - （Dreamerの枠組みとして）actor-critic を更新する
+- このとき **experience ごとの損失 L_i を計算してキャッシュ**する
+  - ここでの L_i は world model 学習損失（Dreamerなら L_image + L_reward + L_KL）に基づく。
+
+### 5.5 優先度・カウント更新（update）
+- **バッチに含まれた各 experience i** についてのみ、次を行う：
+  1) v_i ← v_i + 1  
+  2) p_i ← c * β^{v_i} + (|L_i| + ϵ)^{α}
+- 注意（論文の明示点）：
+  - 「学習に使われたときだけ優先度更新」なので、未サンプルの experience の優先度は古いまま（stale priority の可能性）。
+  - ただし論文では、その stale が問題になる兆候は実験で観測していない。
 
 ---
 
-## 9. 参考：論文に記載の一例ハイパーパラメータ
-- `β = 0.7`, `α = 0.7`, `c = 1e4`, `ε = 0.01`, `p_MAX = 1e5`
-（論文中の実験設定例）
+## 6. DreamerV3 実装に関する追加仕様（論文の “Implementation details”）
+DreamerV3はリプレイが「遷移」ではなく「シーケンス（trajectory chunk）」単位なので、CRを次のように適用する。
+
+### 6.1 バッファの格納単位
+- replay buffer には **長さ 64 のシーケンス**を格納する。
+
+### 6.2 シーケンスのサンプリング確率の決め方
+- **シーケンスを学習に使う確率は、そのシーケンスの “最後のステップ” の優先度**で決める。
+  - （言い換え）sequence-level priority = priority(last step)
+
+### 6.3 学習後の更新対象
+- 1回の training step の後、
+  - **そのシーケンス内の各ステップ**について、v と p を更新する
+  - （=「最後のステップだけ」ではなく、サンプルされたシーケンスに含まれる全ステップを “trained on” として扱う）
+
+### 6.4 実装コンポーネント
+- DreamerV3 側では **Reverb replay buffer**を用いて、シーケンスと優先度を保持しサンプリングする。
+
+### 6.5 running minimum の扱い
+- DreamerV3 の CR 実装では **loss を running minimum で補正しない**（DreamerV2実装と異なる）。
+
+---
+
+## 7. DreamerV2 / DreamerPro 実装に関する追加仕様（論文の “Implementation details”）
+- DreamerV2 / DreamerPro では SumTree 実装として STArr を利用。
+- Curious Replay の優先度計算に使う loss について：
+  - **（全学習を通した）running minimum を loss から引いた値**を使ってから priority を計算する運用をしている。
+  - （注意）Temporal-Difference 優先度（比較用）では running minimum を使わない。
+
+---
+
+## 8. “論文と差が出やすい”実装上の注意点（仕様として明示）
+- 優先度更新は **「サンプルして学習に使った experience（または sampled sequence 内の各 step）」だけ**。全バッファを毎回更新しない。
+- 新規 experience の優先度は **常に最大値 p_max**で初期化する（小さく初期化しない）。
+- DreamerV3 では **sequence sampling = last step priority**、ただし **update は sequence 内の全 step**。
+- DreamerV2/Pro では **running minimum 補正あり**、DreamerV3 では **なし**（論文記載の差分）。
+
+---
