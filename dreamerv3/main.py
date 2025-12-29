@@ -159,6 +159,7 @@ def make_agent(config):
             report_length=config.report_length,
             replica=config.replica,
             replicas=config.replicas,
+            replay=config.replay,
         ),
     )
 
@@ -215,21 +216,23 @@ def make_replay(config, folder, mode="train"):
         directory=directory,
     )
 
-    if config.replay.fracs.uniform < 1 and mode == "train":
+    use_priority = config.replay.fracs.uniform < 1 or config.replay.fracs.get('curious', 0) > 0
+    if use_priority and mode == "train":
         assert config.jax.compute_dtype in ("bfloat16", "float32"), (
             "Gradient scaling for low-precision training can produce invalid loss "
             "outputs that are incompatible with prioritized replay."
         )
         recency = 1.0 / np.arange(1, capacity + 1) ** config.replay.recexp
         selectors = embodied.replay.selectors
-        kwargs["selector"] = selectors.Mixture(
-            dict(
-                uniform=selectors.Uniform(),
-                priority=selectors.Prioritized(**config.replay.prio),
-                recency=selectors.Recency(recency),
-            ),
-            config.replay.fracs,
+        selector_dict = dict(
+            uniform=selectors.Uniform(),
+            priority=selectors.Prioritized(**config.replay.prio),
+            recency=selectors.Recency(recency),
         )
+        # Add CuriousReplay selector if curious fraction > 0
+        if config.replay.fracs.get('curious', 0) > 0:
+            selector_dict['curious'] = selectors.CuriousReplay(**config.replay.curious)
+        kwargs["selector"] = selectors.Mixture(selector_dict, config.replay.fracs)
 
     return embodied.replay.Replay(**kwargs)
 

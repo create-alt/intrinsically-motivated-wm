@@ -2,16 +2,16 @@ import re
 
 import chex
 import elements
-import embodied.jax
-import embodied.jax.nets as nn
 import jax
 import jax.numpy as jnp
 import ninjax as nj
 import numpy as np
 import optax
 
-from . import dormant
-from . import rssm
+import embodied.jax
+import embodied.jax.nets as nn
+
+from . import dormant, intrinsic, rssm
 
 f32 = jnp.float32
 i32 = jnp.int32
@@ -39,6 +39,7 @@ class Agent(embodied.jax.Agent):
         exclude = ("is_first", "is_last", "is_terminal", "reward")
         enc_space = {k: v for k, v in obs_space.items() if k not in exclude}
         dec_space = {k: v for k, v in obs_space.items() if k not in exclude}
+        self.dec_space = dec_space
         self.enc = {
             "simple": rssm.Encoder,
         }[
@@ -83,6 +84,8 @@ class Agent(embodied.jax.Agent):
         self.valnorm = embodied.jax.Normalize(**config.valnorm, name="valnorm")
         self.advnorm = embodied.jax.Normalize(**config.advnorm, name="advnorm")
 
+        self.intrinsic = intrinsic.make_intrinsic_reward(config)
+
         self.modules = [
             self.dyn,
             self.enc,
@@ -92,9 +95,7 @@ class Agent(embodied.jax.Agent):
             self.pol,
             self.val,
         ]
-        self.opt = embodied.jax.Optimizer(
-            self.modules, self._make_opt(**config.opt), summary_depth=1, name="opt"
-        )
+        self.opt = embodied.jax.Optimizer(self.modules, self._make_opt(**config.opt), summary_depth=1, name="opt")
 
         scales = self.config.loss_scales.copy()
         rec = scales.pop("rec")
@@ -142,9 +143,7 @@ class Agent(embodied.jax.Agent):
         kw = dict(training=False, single=True)
         reset = obs["is_first"]
         enc_carry, enc_entry, tokens = self.enc(enc_carry, obs, reset, **kw)
-        dyn_carry, dyn_entry, feat = self.dyn.observe(
-            dyn_carry, tokens, prevact, reset, **kw
-        )
+        dyn_carry, dyn_entry, feat = self.dyn.observe(dyn_carry, tokens, prevact, reset, **kw)
         dec_entry = {}
         if dec_carry:
             dec_carry, dec_entry, recons = self.dec(dec_carry, feat, reset, **kw)
@@ -159,33 +158,28 @@ class Agent(embodied.jax.Agent):
         )
         carry = (enc_carry, dyn_carry, dec_carry, act)
         if self.config.replay_context:
-            out.update(
-                elements.tree.flatdict(
-                    dict(enc=enc_entry, dyn=dyn_entry, dec=dec_entry)
-                )
-            )
+            out.update(elements.tree.flatdict(dict(enc=enc_entry, dyn=dyn_entry, dec=dec_entry)))
         return carry, act, out
 
     def train(self, carry, data):
         carry, obs, prevact, stepid = self._apply_replay_context(carry, data)
-        metrics, (carry, entries, outs, mets) = self.opt(
-            self.loss, carry, obs, prevact, training=True, has_aux=True
-        )
+        metrics, (carry, entries, loss_outs, mets) = self.opt(self.loss, carry, obs, prevact, training=True, has_aux=True)
         metrics.update(mets)
         self.slowval.update()
         outs = {}
         if self.config.replay_context:
-            updates = elements.tree.flatdict(
-                dict(stepid=stepid, enc=entries[0], dyn=entries[1], dec=entries[2])
-            )
+            updates = elements.tree.flatdict(dict(stepid=stepid, enc=entries[0], dyn=entries[1], dec=entries[2]))
             B, T = obs["is_first"].shape
             assert all(x.shape[:2] == (B, T) for x in updates.values()), (
                 (B, T),
                 {k: v.shape for k, v in updates.items()},
             )
             outs["replay"] = updates
-        # if self.config.replay.fracs.priority > 0:
-        #   outs['replay']['priority'] = losses['model']
+        # Add priority for Curious Replay
+        if self.config.replay.fracs.get('curious', 0) > 0:
+            if "replay" not in outs:
+                outs["replay"] = {"stepid": stepid}
+            outs["replay"]["priority"] = loss_outs["model_loss"]
         carry = (*carry, {k: data[k][:, -1] for k in self.act_space})
         return carry, outs, metrics
 
@@ -198,14 +192,10 @@ class Agent(embodied.jax.Agent):
 
         # World model
         enc_carry, enc_entries, tokens = self.enc(enc_carry, obs, reset, training)
-        dyn_carry, dyn_entries, los, repfeat, mets = self.dyn.loss(
-            dyn_carry, tokens, prevact, reset, training
-        )
+        dyn_carry, dyn_entries, los, repfeat, mets = self.dyn.loss(dyn_carry, tokens, prevact, reset, training)
         losses.update(los)
         metrics.update(mets)
-        dec_carry, dec_entries, recons = self.dec(
-            dec_carry, repfeat, reset, training, return_features=return_features
-        )
+        dec_carry, dec_entries, recons = self.dec(dec_carry, repfeat, reset, training, return_features=return_features)
         inp = sg(self.feat2tensor(repfeat), skip=self.config.reward_grad)
         losses["rew"] = self.rew(inp, 2).loss(obs["reward"])
         con = f32(~obs["is_terminal"])
@@ -228,9 +218,7 @@ class Agent(embodied.jax.Agent):
         starts = self.dyn.starts(dyn_entries, dyn_carry, K)
         policyfn = lambda feat: sample(self.pol(self.feat2tensor(feat), 1))
         _, imgfeat, imgprevact = self.dyn.imagine(starts, policyfn, H, training)
-        first = jax.tree.map(
-            lambda x: x[:, -K:].reshape((B * K, 1, *x.shape[2:])), repfeat
-        )
+        first = jax.tree.map(lambda x: x[:, -K:].reshape((B * K, 1, *x.shape[2:])), repfeat)
         imgfeat = concat([sg(first, skip=self.config.ac_grads), sg(imgfeat)], 1)
         lastact = policyfn(jax.tree.map(lambda x: x[:, -1], imgfeat))
         lastact = jax.tree.map(lambda x: x[:, None], lastact)
@@ -238,9 +226,17 @@ class Agent(embodied.jax.Agent):
         assert all(x.shape[:2] == (B * K, H + 1) for x in jax.tree.leaves(imgfeat))
         assert all(x.shape[:2] == (B * K, H + 1) for x in jax.tree.leaves(imgact))
         inp = self.feat2tensor(imgfeat)
+
+        # Extrinsic reward prediction
+        rew_ext = self.rew(inp, 2).pred()
+
+        # Apply intrinsic reward augmentation
+        rew_total, intr_mets = self.intrinsic(rew_ext, imgfeat, training)
+        metrics.update(intr_mets)
+
         los, imgloss_out, mets = imag_loss(
             imgact,
-            self.rew(inp, 2).pred(),
+            rew_total,
             self.con(inp, 2).prob(1),
             self.pol(inp, 2),
             self.val(inp, 2),
@@ -261,9 +257,7 @@ class Agent(embodied.jax.Agent):
             feat = sg(repfeat, skip=self.config.repval_grad)
             last, term, rew = [obs[k] for k in ("is_last", "is_terminal", "reward")]
             boot = imgloss_out["ret"][:, 0].reshape(B, K)
-            feat, last, term, rew, boot = jax.tree.map(
-                lambda x: x[:, -K:], (feat, last, term, rew, boot)
-            )
+            feat, last, term, rew, boot = jax.tree.map(lambda x: x[:, -K:], (feat, last, term, rew, boot))
             inp = self.feat2tensor(feat)
             los, reploss_out, mets = repl_loss(
                 last,
@@ -292,6 +286,15 @@ class Agent(embodied.jax.Agent):
         outs = {"tokens": tokens, "repfeat": repfeat, "losses": losses}
         if return_features:
             outs["decfeat"] = dec_entries.get("features", {})
+
+        # Compute model loss for Curious Replay (sum of world model components)
+        # World model losses: dyn, rep, rew, con, + reconstruction losses
+        wm_loss_keys = ['dyn', 'rep', 'rew', 'con']
+        # Add reconstruction losses (keys in dec_space, e.g., 'image')
+        wm_loss_keys += [k for k in self.dec_space.keys() if k in losses]
+        model_loss = sum(losses[k] for k in wm_loss_keys if k in losses)
+        outs["model_loss"] = model_loss  # Shape: (B, T)
+
         return loss, (carry, entries, outs, metrics)
 
     def report(self, carry, data):
@@ -314,9 +317,7 @@ class Agent(embodied.jax.Agent):
         if self.config.report_gradnorms:
             for key in self.scales:
                 try:
-                    lossfn = lambda data, carry: self.loss(
-                        carry, obs, prevact, training=False
-                    )[1][2]["losses"][key].mean()
+                    lossfn = lambda data, carry: self.loss(carry, obs, prevact, training=False)[1][2]["losses"][key].mean()
                     grad = nj.grad(lossfn, self.modules)(data, carry)[-1]
                     metrics[f"gradnorm/{key}"] = optax.global_norm(grad)
                 except KeyError:
@@ -389,12 +390,8 @@ class Agent(embodied.jax.Agent):
             firsthalf(obs["is_first"]),
             training=False,
         )
-        _, imgfeat, _ = self.dyn.imagine(
-            dyn_carry, secondhalf(prevact), length=T - T // 2, training=False
-        )
-        dec_carry, _, obsrecons = self.dec(
-            dec_carry, obsfeat, firsthalf(obs["is_first"]), training=False
-        )
+        _, imgfeat, _ = self.dyn.imagine(dyn_carry, secondhalf(prevact), length=T - T // 2, training=False)
+        dec_carry, _, obsrecons = self.dec(dec_carry, obsfeat, firsthalf(obs["is_first"]), training=False)
         dec_carry, _, imgrecons = self.dec(
             dec_carry,
             imgfeat,
@@ -534,20 +531,13 @@ def imag_loss(
     adv_normed = (adv - aoffset) / ascale
     logpi = sum([v.logp(sg(act[k]))[:, :-1] for k, v in policy.items()])
     ents = {k: v.entropy()[:, :-1] for k, v in policy.items()}
-    policy_loss = sg(weight[:, :-1]) * -(
-        logpi * sg(adv_normed) + actent * sum(ents.values())
-    )
+    policy_loss = sg(weight[:, :-1]) * -(logpi * sg(adv_normed) + actent * sum(ents.values()))
     losses["policy"] = policy_loss
 
     voffset, vscale = valnorm(ret, update)
     tar_normed = (ret - voffset) / vscale
     tar_padded = jnp.concatenate([tar_normed, 0 * tar_normed[:, -1:]], 1)
-    losses["value"] = (
-        sg(weight[:, :-1])
-        * (value.loss(sg(tar_padded)) + slowreg * value.loss(sg(slowvalue.pred())))[
-            :, :-1
-        ]
-    )
+    losses["value"] = sg(weight[:, :-1]) * (value.loss(sg(tar_padded)) + slowreg * value.loss(sg(slowvalue.pred())))[:, :-1]
 
     ret_normed = (ret - roffset) / rscale
     metrics["adv"] = adv.mean()
@@ -601,12 +591,7 @@ def repl_loss(
     voffset, vscale = valnorm(ret, update)
     ret_normed = (ret - voffset) / vscale
     ret_padded = jnp.concatenate([ret_normed, 0 * ret_normed[:, -1:]], 1)
-    losses["repval"] = (
-        weight[:, :-1]
-        * (value.loss(sg(ret_padded)) + slowreg * value.loss(sg(slowvalue.pred())))[
-            :, :-1
-        ]
-    )
+    losses["repval"] = weight[:, :-1] * (value.loss(sg(ret_padded)) + slowreg * value.loss(sg(slowvalue.pred())))[:, :-1]
 
     outs = {}
     outs["ret"] = ret
