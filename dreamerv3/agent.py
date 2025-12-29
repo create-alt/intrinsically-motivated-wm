@@ -162,7 +162,7 @@ class Agent(embodied.jax.Agent):
 
     def train(self, carry, data):
         carry, obs, prevact, stepid = self._apply_replay_context(carry, data)
-        metrics, (carry, entries, outs, mets) = self.opt(self.loss, carry, obs, prevact, training=True, has_aux=True)
+        metrics, (carry, entries, loss_outs, mets) = self.opt(self.loss, carry, obs, prevact, training=True, has_aux=True)
         metrics.update(mets)
         self.slowval.update()
         outs = {}
@@ -174,8 +174,11 @@ class Agent(embodied.jax.Agent):
                 {k: v.shape for k, v in updates.items()},
             )
             outs["replay"] = updates
-        # if self.config.replay.fracs.priority > 0:
-        #   outs['replay']['priority'] = losses['model']
+        # Add priority for Curious Replay
+        if self.config.replay.fracs.get('curious', 0) > 0:
+            if "replay" not in outs:
+                outs["replay"] = {"stepid": stepid}
+            outs["replay"]["priority"] = loss_outs["model_loss"]
         carry = (*carry, {k: data[k][:, -1] for k in self.act_space})
         return carry, outs, metrics
 
@@ -282,6 +285,15 @@ class Agent(embodied.jax.Agent):
         outs = {"tokens": tokens, "repfeat": repfeat, "losses": losses}
         if return_features:
             outs["decfeat"] = dec_entries.get("features", {})
+
+        # Compute model loss for Curious Replay (sum of world model components)
+        # World model losses: dyn, rep, rew, con, + reconstruction losses
+        wm_loss_keys = ['dyn', 'rep', 'rew', 'con']
+        # Add reconstruction losses (keys in dec_space, e.g., 'image')
+        wm_loss_keys += [k for k in dec_space.keys() if k in losses]
+        model_loss = sum(losses[k] for k in wm_loss_keys if k in losses)
+        outs["model_loss"] = model_loss  # Shape: (B, T)
+
         return loss, (carry, entries, outs, metrics)
 
     def report(self, carry, data):

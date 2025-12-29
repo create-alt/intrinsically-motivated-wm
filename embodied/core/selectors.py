@@ -205,6 +205,125 @@ class Prioritized:
             return mean
 
 
+class CuriousReplay:
+    """Curious Replay: count-based + loss-based priority.
+
+    Priority formula:
+        priority = (c * beta^visit_count) + (model_loss + epsilon)^alpha
+
+    Args:
+        c: Coefficient for count-based component (default: 1e4)
+        beta: Decay factor for visit counts (default: 0.7)
+        alpha: Power term for model loss (default: 0.7)
+        epsilon: Numerical stability constant (default: 0.01)
+        initial: Initial priority for new items (default: inf)
+        branching: Tree branching factor (default: 16)
+        seed: Random seed (default: 0)
+    """
+
+    def __init__(
+        self,
+        c=1e4,
+        beta=0.7,
+        alpha=0.7,
+        epsilon=0.01,
+        initial=float('inf'),
+        branching=16,
+        seed=0,
+    ):
+        self.c = float(c)
+        self.beta = float(beta)
+        self.alpha = float(alpha)
+        self.epsilon = float(epsilon)
+        self.initial = float(initial)
+
+        self.tree = SampleTree(branching, seed)
+        self.items = {}  # itemid -> list of stepids
+        self.stepitems = collections.defaultdict(list)  # stepid -> list of itemids
+
+        # Track per-step data
+        self.visit_counts = collections.defaultdict(int)  # stepid -> visit_count
+        self.model_losses = collections.defaultdict(lambda: self.initial)  # stepid -> loss
+
+    def _compute_priority(self, stepid):
+        """Compute Curious Replay priority for a single step."""
+        visit_count = self.visit_counts[stepid]
+        model_loss = self.model_losses[stepid]
+
+        # Handle initial infinite priority
+        if not np.isfinite(model_loss):
+            return self.initial
+
+        count_term = self.c * (self.beta ** visit_count)
+        loss_term = (model_loss + self.epsilon) ** self.alpha
+
+        return count_term + loss_term
+
+    def _aggregate(self, key):
+        """Aggregate priorities across steps in an item (sequence).
+
+        Uses last step's priority as per DreamerV3 CR implementation.
+        """
+        stepids = self.items[key]
+        # Use last step's priority (as per paper's DreamerV3 implementation)
+        last_stepid = stepids[-1]
+        return self._compute_priority(last_stepid)
+
+    def prioritize(self, stepids, priorities):
+        """Update priorities and visit counts for sampled steps.
+
+        Args:
+            stepids: Array of step identifiers
+            priorities: Array of model losses (not final priorities)
+        """
+        if not isinstance(stepids[0], bytes):
+            stepids = [x.tobytes() for x in stepids]
+
+        for stepid, loss in zip(stepids, priorities):
+            # Update visit count
+            self.visit_counts[stepid] += 1
+            # Store model loss
+            self.model_losses[stepid] = float(loss)
+
+        # Recompute priorities for affected items
+        items = []
+        for stepid in stepids:
+            items += self.stepitems[stepid]
+        for key in list(set(items)):
+            try:
+                self.tree.update(key, self._aggregate(key))
+            except KeyError:
+                pass
+
+    def __len__(self):
+        return len(self.items)
+
+    def __call__(self):
+        """Sample an item based on priority."""
+        return self.tree.sample()
+
+    def __setitem__(self, key, stepids):
+        """Add a new item with its step IDs."""
+        if not isinstance(stepids[0], bytes):
+            stepids = [x.tobytes() for x in stepids]
+        self.items[key] = stepids
+        [self.stepitems[stepid].append(key) for stepid in stepids]
+        # Initialize with high priority (inf) for new items
+        self.tree.insert(key, self._aggregate(key))
+
+    def __delitem__(self, key):
+        """Remove an item."""
+        self.tree.remove(key)
+        stepids = self.items.pop(key)
+        for stepid in stepids:
+            stepitems = self.stepitems[stepid]
+            stepitems.remove(key)
+            if not stepitems:
+                del self.stepitems[stepid]
+                del self.visit_counts[stepid]
+                del self.model_losses[stepid]
+
+
 class Mixture:
 
     def __init__(self, selectors, fractions, seed=0):
