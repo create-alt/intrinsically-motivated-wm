@@ -11,7 +11,7 @@ import optax
 import embodied.jax
 import embodied.jax.nets as nn
 
-from . import dormant, rssm
+from . import dormant, intrinsic, rssm
 
 f32 = jnp.float32
 i32 = jnp.int32
@@ -82,6 +82,8 @@ class Agent(embodied.jax.Agent):
         self.retnorm = embodied.jax.Normalize(**config.retnorm, name="retnorm")
         self.valnorm = embodied.jax.Normalize(**config.valnorm, name="valnorm")
         self.advnorm = embodied.jax.Normalize(**config.advnorm, name="advnorm")
+
+        self.intrinsic = intrinsic.make_intrinsic_reward(config)
 
         self.modules = [
             self.dyn,
@@ -220,9 +222,17 @@ class Agent(embodied.jax.Agent):
         assert all(x.shape[:2] == (B * K, H + 1) for x in jax.tree.leaves(imgfeat))
         assert all(x.shape[:2] == (B * K, H + 1) for x in jax.tree.leaves(imgact))
         inp = self.feat2tensor(imgfeat)
+
+        # Extrinsic reward prediction
+        rew_ext = self.rew(inp, 2).pred()
+
+        # Apply intrinsic reward augmentation
+        rew_total, intr_mets = self.intrinsic(rew_ext, imgfeat, training)
+        metrics.update(intr_mets)
+
         los, imgloss_out, mets = imag_loss(
             imgact,
-            self.rew(inp, 2).pred(),
+            rew_total,
             self.con(inp, 2).prob(1),
             self.pol(inp, 2),
             self.val(inp, 2),

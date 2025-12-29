@@ -117,6 +117,10 @@ defaults:
     report: True
     report_gradnorms: False
     dormant: {enable: False, tau: 0.025}
+    intrinsic:
+      enable: False
+      typ: adaptive
+      adaptive: {beta_max: 0.1, rho: 0.1, epsilon: 1e-6, clip_min: -10.0, clip_max: 10.0}
 
 size1m: &size1m
   .*\.rssm: {deter: 512, hidden: 64, classes: 4}
