@@ -217,6 +217,7 @@ class CuriousReplay:
         alpha: Power term for model loss (default: 0.7)
         epsilon: Numerical stability constant (default: 0.01)
         initial: Initial priority for new items (default: inf)
+        entropy_lambda: Unused placeholder for agent-side priority shaping (default: 0.0)
         branching: Tree branching factor (default: 16)
         seed: Random seed (default: 0)
     """
@@ -228,6 +229,7 @@ class CuriousReplay:
         alpha=0.7,
         epsilon=0.01,
         initial=float('inf'),
+        entropy_lambda=0.0,
         branching=16,
         seed=0,
     ):
@@ -236,6 +238,7 @@ class CuriousReplay:
         self.alpha = float(alpha)
         self.epsilon = float(epsilon)
         self.initial = float(initial)
+        self.entropy_lambda = float(entropy_lambda)
 
         self.tree = SampleTree(branching, seed)
         self.items = {}  # itemid -> list of stepids
