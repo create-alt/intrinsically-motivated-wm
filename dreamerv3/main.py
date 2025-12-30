@@ -17,10 +17,6 @@ import ruamel.yaml as yaml
 
 
 def main(argv=None):
-    from .agent import Agent
-
-    [elements.print(line) for line in Agent.banner]
-
     configs = elements.Path(folder / "configs.yaml").read()
     configs = yaml.YAML(typ="safe").load(configs)
     parsed, other = elements.Flags(configs=["defaults"]).parse_known(argv)
@@ -31,6 +27,8 @@ def main(argv=None):
     config = config.update(
         logdir=(config.logdir.format(timestamp=elements.timestamp()))
     )
+    Agent = resolve_agent_class(config)
+    [elements.print(line) for line in Agent.banner]
 
     if "JOB_COMPLETION_INDEX" in os.environ:
         config = config.update(replica=int(os.environ["JOB_COMPLETION_INDEX"]))
@@ -134,7 +132,7 @@ def main(argv=None):
 
 
 def make_agent(config):
-    from .agent import Agent
+    Agent = resolve_agent_class(config)
 
     env = make_env(config, 0)
     notlog = lambda k: not k.startswith("log/")
@@ -162,6 +160,24 @@ def make_agent(config):
             replay=config.replay,
         ),
     )
+
+
+def resolve_agent_class(config):
+    """Resolve the agent class based on the selected method.
+
+    Args:
+        config: Parsed experiment config.
+
+    Returns:
+        type: Agent class to instantiate.
+    """
+    if config.method == "ac":
+        from .ac_agent import Agent
+
+        return Agent
+    from .agent import Agent
+
+    return Agent
 
 
 def make_logger(config):
