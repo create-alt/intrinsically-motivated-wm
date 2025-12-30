@@ -15,7 +15,7 @@ source .venv/bin/activate
 
 # タイムスタンプ
 TIME_STR=$(date '+%y%m%d%H%M')
-LOG_DIR="log/${TIME_STR}_ac_dmc_cheetah_run_vision_12m_batch240"
+LOG_DIR="log/${TIME_STR}_ac_atari100k_ms_pacman_batch240"
 
 # ログディレクトリ作成
 mkdir -p ${LOG_DIR}
@@ -46,13 +46,10 @@ echo "" >> ${LOG_DIR}/log.log
 
 # nohupで実行
 nohup python dreamerv3/main.py \
-    --configs dmc_vision size12m \
-    --task dmc_cheetah_run \
-    --run.steps 1e6 \
-    --run.envs 16 \
+    --configs atari100k \
+    --task atari100k_ms_pacman \
     --run.train_ratio 3840 \
     --batch_size 240 \
-    --env.dmc.repeat 2 \
     --logdir ${LOG_DIR} \
     --seed 0 \
     --method ac \

@@ -15,7 +15,7 @@ source .venv/bin/activate
 
 # タイムスタンプ
 TIME_STR=$(date '+%y%m%d%H%M')
-LOG_DIR="log/${TIME_STR}_ac_dmc_cheetah_run_vision_12m_batch240"
+LOG_DIR="log/${TIME_STR}_ac_dmc_cheetah_run_vision_12m_batch240_proprio"
 
 # ログディレクトリ作成
 mkdir -p ${LOG_DIR}
@@ -26,6 +26,7 @@ echo "Log directory: ${LOG_DIR}"
 echo "Log file: ${LOG_DIR}/log.log"
 echo "Batch size: 240 (match Dreamer update frequency)"
 echo "Train ratio: 3840 (match Dreamer actor/critic signal)"
+echo "Proprio: enabled"
 echo "=========================================="
 echo ""
 
@@ -41,6 +42,7 @@ echo "=========================================" >> ${LOG_DIR}/log.log
 echo "Training started at $(date)" >> ${LOG_DIR}/log.log
 echo "Batch size: 240 (match Dreamer update frequency)" >> ${LOG_DIR}/log.log
 echo "Train ratio: 3840 (match Dreamer actor/critic signal)" >> ${LOG_DIR}/log.log
+echo "Proprio: enabled" >> ${LOG_DIR}/log.log
 echo "=========================================" >> ${LOG_DIR}/log.log
 echo "" >> ${LOG_DIR}/log.log
 
@@ -53,6 +55,7 @@ nohup python dreamerv3/main.py \
     --run.train_ratio 3840 \
     --batch_size 240 \
     --env.dmc.repeat 2 \
+    --env.dmc.proprio True \
     --logdir ${LOG_DIR} \
     --seed 0 \
     --method ac \

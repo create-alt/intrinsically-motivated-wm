@@ -66,9 +66,7 @@ class Agent(embodied.jax.Agent):
             self.pol,
             self.val,
         ]
-        self.opt = embodied.jax.Optimizer(
-            self.modules, self._make_opt(**config.opt), summary_depth=1, name="opt"
-        )
+        self.opt = embodied.jax.Optimizer(self.modules, self._make_opt(**config.opt), summary_depth=1, name="opt")
 
         self.scales = {k: config.loss_scales[k] for k in ("policy", "value")}
 
@@ -109,9 +107,7 @@ class Agent(embodied.jax.Agent):
 
     def train(self, carry, data):
         carry, obs, act, _ = self._apply_replay_context(carry, data)
-        metrics, (carry, outs, mets) = self.opt(
-            self.loss, carry, obs, act, training=True, has_aux=True
-        )
+        metrics, (carry, outs, mets) = self.opt(self.loss, carry, obs, act, training=True, has_aux=True)
         metrics.update(mets)
         self.slowval.update()
         return carry, outs, metrics
@@ -165,9 +161,7 @@ class Agent(embodied.jax.Agent):
 
         carry, obs, act, _ = self._apply_replay_context(carry, data)
         metrics = {}
-        _, (new_carry, outs, mets) = self.loss(
-            carry, obs, act, training=False, return_layers=self.config.dormant.enable
-        )
+        _, (new_carry, outs, mets) = self.loss(carry, obs, act, training=False, return_layers=self.config.dormant.enable)
         metrics.update(mets)
 
         if self.config.dormant.enable:
@@ -281,7 +275,7 @@ def ac_loss(
     advnorm,
     update,
     contdisc=True,
-    slowtar=False,
+    slowtar=True,
     horizon=333,
     lam=0.95,
     actent=3e-4,
@@ -329,17 +323,13 @@ def ac_loss(
     adv_normed = (adv - aoffset) / ascale
     logpi = sum([v.logp(sg(act[k]))[:, :-1] for k, v in policy.items()])
     ents = {k: v.entropy()[:, :-1] for k, v in policy.items()}
-    policy_loss = sg(weight[:, :-1]) * -(
-        logpi * sg(adv_normed) + actent * sum(ents.values())
-    )
+    policy_loss = sg(weight[:, :-1]) * -(logpi * sg(adv_normed) + actent * sum(ents.values()))
     losses["policy"] = policy_loss
 
     voffset, vscale = valnorm(ret, update)
     tar_normed = (ret - voffset) / vscale
     tar_padded = jnp.concatenate([tar_normed, 0 * tar_normed[:, -1:]], 1)
-    value_loss = (
-        value.loss(sg(tar_padded)) + slowreg * value.loss(sg(slowvalue.pred()))
-    )[:, :-1]
+    value_loss = (value.loss(sg(tar_padded)) + slowreg * value.loss(sg(slowvalue.pred())))[:, :-1]
     losses["value"] = sg(weight[:, :-1]) * value_loss
 
     ret_normed = (ret - roffset) / rscale
