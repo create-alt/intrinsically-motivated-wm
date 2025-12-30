@@ -179,7 +179,16 @@ class Agent(embodied.jax.Agent):
         if self.config.replay.fracs.get('curious', 0) > 0:
             if "replay" not in outs:
                 outs["replay"] = {"stepid": stepid}
-            outs["replay"]["priority"] = loss_outs["model_loss"]
+            priority = loss_outs["model_loss"]
+            lam = self.config.replay.curious.entropy_lambda
+            if lam > 0:
+                stoch_ent = loss_outs["stoch_entropy"]
+                mean_loss = jnp.mean(priority)
+                mean_ent = jnp.mean(stoch_ent)
+                # Auto-scale lambda to the current loss scale.
+                lam_eff = lam * mean_loss / (mean_ent + 1e-8)
+                priority = jnp.maximum(priority - lam_eff * stoch_ent, 0)
+            outs["replay"]["priority"] = priority
         carry = (*carry, {k: data[k][:, -1] for k in self.act_space})
         return carry, outs, metrics
 
@@ -294,6 +303,9 @@ class Agent(embodied.jax.Agent):
         wm_loss_keys += [k for k in self.dec_space.keys() if k in losses]
         model_loss = sum(losses[k] for k in wm_loss_keys if k in losses)
         outs["model_loss"] = model_loss  # Shape: (B, T)
+        if self.config.replay.fracs.get('curious', 0) > 0 and self.config.replay.curious.entropy_lambda > 0:
+            stoch_ent = self.dyn._dist(repfeat["logit"]).entropy()
+            outs["stoch_entropy"] = stoch_ent / self.dyn.stoch  # Shape: (B, T)
 
         return loss, (carry, entries, outs, metrics)
 

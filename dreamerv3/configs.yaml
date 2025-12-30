@@ -41,7 +41,7 @@ defaults:
     online: True
     fracs: {uniform: 1.0, priority: 0.0, recency: 0.0, curious: 0.0}
     prio: {exponent: 0.8, maxfrac: 0.5, initial: inf, zero_on_sample: True}
-    curious: {c: 1e4, beta: 0.7, alpha: 0.7, epsilon: 0.01, initial: inf}
+    curious: {c: 1e4, beta: 0.7, alpha: 0.7, epsilon: 0.01, initial: inf, entropy_lambda: 0.0}
     priosignal: model
     recexp: 1.0
     chunksize: 1024
@@ -228,4 +228,4 @@ debug:
 curious_replay:
   replay:
     fracs: {uniform: 0.0, priority: 0.0, recency: 0.0, curious: 1.0}
-    curious: {c: 1e4, beta: 0.7, alpha: 0.7, epsilon: 0.01, initial: inf}
+    curious: {c: 1e4, beta: 0.7, alpha: 0.7, epsilon: 0.01, initial: inf, entropy_lambda: 0.0}
