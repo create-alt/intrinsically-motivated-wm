@@ -344,6 +344,9 @@ class Mixture:
     def __call__(self):
         return self.rng.choice(self.selectors, p=self.fractions)()
 
+    def __len__(self):
+        return len(self.selectors[0]) if self.selectors else 0
+
     def __setitem__(self, key, stepids):
         for selector in self.selectors:
             selector[key] = stepids
