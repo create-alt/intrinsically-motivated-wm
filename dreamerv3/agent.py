@@ -176,7 +176,7 @@ class Agent(embodied.jax.Agent):
             )
             outs["replay"] = updates
         # Add priority for Curious Replay
-        if self.config.replay.fracs.get('curious', 0) > 0:
+        if self.config.replay.fracs.get("curious", 0) > 0:
             if "replay" not in outs:
                 outs["replay"] = {"stepid": stepid}
             priority = loss_outs["model_loss"]
@@ -188,7 +188,20 @@ class Agent(embodied.jax.Agent):
                 # Auto-scale lambda to the current loss scale.
                 lam_eff = lam * mean_loss / (mean_ent + 1e-8)
                 priority = jnp.maximum(priority - lam_eff * stoch_ent, 0)
-            outs["replay"]["priority"] = priority
+            outs["replay"]["priority_curious"] = priority
+            if self.config.replay.fracs.get("priority", 0) > 0:
+                outs["replay"]["priority"] = priority
+        # Add explore/exploit priorities from KL(post || prior).
+        if (
+            self.config.replay.fracs.get("explore", 0) > 0
+            or self.config.replay.fracs.get("exploit", 0) > 0
+        ):
+            if "replay" not in outs:
+                outs["replay"] = {"stepid": stepid}
+            kl = loss_outs["losses"]["rep"]
+            eps = self.config.replay.trend.eps
+            outs["replay"]["priority_explore"] = kl
+            outs["replay"]["priority_exploit"] = 1.0 / jnp.maximum(kl, eps)
         carry = (*carry, {k: data[k][:, -1] for k in self.act_space})
         return carry, outs, metrics
 

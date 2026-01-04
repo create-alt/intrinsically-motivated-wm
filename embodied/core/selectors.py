@@ -337,8 +337,10 @@ class Mixture:
                 selectors.pop(key)
                 fractions.pop(key)
         keys = sorted(selectors.keys())
+        self.names = keys
         self.selectors = [selectors[key] for key in keys]
         self.fractions = np.array([fractions[key] for key in keys], np.float32)
+        self.selector_map = {key: selectors[key] for key in keys}
         self.rng = np.random.default_rng(seed)
 
     def __call__(self):
@@ -356,9 +358,67 @@ class Mixture:
             del selector[key]
 
     def prioritize(self, stepids, priorities):
+        if isinstance(priorities, dict):
+            for name, priority in priorities.items():
+                selector = self.selector_map.get(name)
+                if selector is None:
+                    continue
+                if hasattr(selector, "prioritize"):
+                    selector.prioritize(stepids, priority)
+            return
         for selector in self.selectors:
             if hasattr(selector, "prioritize"):
                 selector.prioritize(stepids, priorities)
+
+
+class TrendMixture(Mixture):
+    """Mixture with a dynamic gate between explore/exploit selectors.
+
+    Args:
+        selectors: Mapping from selector names to selector instances.
+        fractions: Base fractions that sum to 1.0.
+        explore_key: Key name for the explore selector.
+        exploit_key: Key name for the exploit selector.
+        gate: Initial exploit gate in [0, 1].
+        seed: Random seed.
+    Returns:
+        None.
+    """
+
+    def __init__(
+        self,
+        selectors,
+        fractions,
+        explore_key="explore",
+        exploit_key="exploit",
+        gate=0.5,
+        seed=0,
+    ):
+        self.explore_key = explore_key
+        self.exploit_key = exploit_key
+        self.trend_total = fractions.get(explore_key, 0) + fractions.get(exploit_key, 0)
+        self.static_fracs = {
+            k: v for k, v in fractions.items() if k not in (explore_key, exploit_key)
+        }
+        self.gate = float(gate)
+        super().__init__(selectors, self._compose_fractions(), seed=seed)
+
+    def set_gate(self, gate):
+        self.gate = float(np.clip(gate, 0.0, 1.0))
+        fracs = self._compose_fractions()
+        self.fractions = np.array([fracs[name] for name in self.names], np.float32)
+
+    def _compose_fractions(self):
+        fracs = dict(self.static_fracs)
+        explore = self.trend_total * (1 - self.gate)
+        exploit = self.trend_total * self.gate
+        if self.explore_key in fracs or self.trend_total:
+            fracs[self.explore_key] = explore
+        if self.exploit_key in fracs or self.trend_total:
+            fracs[self.exploit_key] = exploit
+        total = sum(fracs.values())
+        assert total > 0, fracs
+        return {k: v / total for k, v in fracs.items()}
 
 
 class SampleTree:

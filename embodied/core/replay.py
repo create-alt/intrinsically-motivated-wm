@@ -21,6 +21,7 @@ class Replay:
         chunksize=1024,
         online=False,
         selector=None,
+        trend=None,
         save_wait=False,
         name="unnamed",
         seed=0,
@@ -61,6 +62,23 @@ class Replay:
 
         self.metrics = {"samples": 0, "inserts": 0, "updates": 0}
 
+        self.trend = trend or {}
+        self.trend_enabled = bool(self.trend.get("enable", False))
+        if self.trend_enabled:
+            self.trend_fast = float(self.trend.get("fast", 0.1))
+            self.trend_slow = float(self.trend.get("slow", 0.01))
+            self.trend_k = float(self.trend.get("k", 1.0))
+            self.trend_gate_min = float(self.trend.get("gate_min", 0.0))
+            self.trend_gate_max = float(self.trend.get("gate_max", 1.0))
+            self.trend_gate = float(self.trend.get("gate_init", 0.5))
+            self.trend_fast_ema = None
+            self.trend_slow_ema = None
+            self.trend_prev = 0.0
+            self.trend_lock = threading.Lock()
+            self.trend_returns = defaultdict(float)
+            if hasattr(self.sampler, "set_gate"):
+                self.sampler.set_gate(self.trend_gate)
+
     def __len__(self):
         return len(self.items)
 
@@ -78,6 +96,8 @@ class Replay:
             "updates": m["updates"],
             "replay_ratio": ratio(self.length * m["samples"], m["inserts"]),
         }
+        if self.trend_enabled:
+            stats["trend_gate"] = self.trend_gate
         for key in self.metrics:
             self.metrics[key] = 0
         return stats
@@ -87,6 +107,8 @@ class Replay:
         step = {k: v for k, v in step.items() if not k.startswith("log/")}
         with self.rwlock.reading:
             step = {k: np.asarray(v) for k, v in step.items()}
+            if self.trend_enabled:
+                self._update_trend(step, worker)
 
             if worker not in self.current:
                 chunk = chunklib.Chunk(self.chunksize)
@@ -140,13 +162,34 @@ class Replay:
     def update(self, data):
         stepid = data.pop("stepid")
         priority = data.pop("priority", None)
+        priority_explore = data.pop("priority_explore", None)
+        priority_exploit = data.pop("priority_exploit", None)
+        priority_curious = data.pop("priority_curious", None)
         assert stepid.ndim == 3, stepid.shape
         self.metrics["updates"] += int(np.prod(stepid.shape[:-1]))
+        priorities = {}
         if priority is not None:
             assert priority.ndim == 2, priority.shape
-            self.sampler.prioritize(
-                stepid.reshape((-1, stepid.shape[-1])), priority.flatten()
-            )
+            priorities["priority"] = priority
+        if priority_explore is not None:
+            assert priority_explore.ndim == 2, priority_explore.shape
+            priorities["explore"] = priority_explore
+        if priority_exploit is not None:
+            assert priority_exploit.ndim == 2, priority_exploit.shape
+            priorities["exploit"] = priority_exploit
+        if priority_curious is not None:
+            assert priority_curious.ndim == 2, priority_curious.shape
+            priorities["curious"] = priority_curious
+        if priorities:
+            if len(priorities) == 1 and "priority" in priorities:
+                self.sampler.prioritize(
+                    stepid.reshape((-1, stepid.shape[-1])),
+                    priorities["priority"].flatten(),
+                )
+            else:
+                flat_stepid = stepid.reshape((-1, stepid.shape[-1]))
+                flat_prios = {k: v.flatten() for k, v in priorities.items()}
+                self.sampler.prioritize(flat_stepid, flat_prios)
         if data:
             for i, stepid in enumerate(stepid):
                 stepid = stepid[0].tobytes()
@@ -379,6 +422,39 @@ class Replay:
         self.current[worker] = (succ.uuid, 0)
         chunk.succ = succ.uuid
         return succ
+
+    def _update_trend(self, step, worker):
+        if "reward" not in step or "is_last" not in step or "is_first" not in step:
+            return
+        if step["is_first"]:
+            self.trend_returns[worker] = 0.0
+        self.trend_returns[worker] += float(step["reward"])
+        if not step["is_last"]:
+            return
+        episode_return = self.trend_returns.pop(worker, 0.0)
+        with self.trend_lock:
+            if self.trend_fast_ema is None:
+                self.trend_fast_ema = episode_return
+                self.trend_slow_ema = episode_return
+                trend = 0.0
+            else:
+                self.trend_fast_ema = (
+                    (1 - self.trend_fast) * self.trend_fast_ema
+                    + self.trend_fast * episode_return
+                )
+                self.trend_slow_ema = (
+                    (1 - self.trend_slow) * self.trend_slow_ema
+                    + self.trend_slow * episode_return
+                )
+                trend = self.trend_fast_ema - self.trend_slow_ema
+            accel = trend - self.trend_prev
+            self.trend_prev = trend
+            x = np.clip(self.trend_k * accel, -60.0, 60.0)
+            gate = 1.0 / (1.0 + np.exp(-x))
+            gate = np.clip(gate, self.trend_gate_min, self.trend_gate_max)
+            self.trend_gate = float(gate)
+            if hasattr(self.sampler, "set_gate"):
+                self.sampler.set_gate(self.trend_gate)
 
     def _numitems(self, chunks):
         chunks = [x.filename if hasattr(x, "filename") else x for x in chunks]
