@@ -104,10 +104,7 @@ class Recency:
                 p = p[segment]
             index = rng.choice(len(segment), p=p)
             path.append(index)
-        index = sum(
-            index * bfactor ** (len(tree) - level - 1)
-            for level, index in enumerate(path)
-        )
+        index = sum(index * bfactor ** (len(tree) - level - 1) for level, index in enumerate(path))
         return index
 
     def _build(self, uprobs, bfactor=16):
@@ -228,7 +225,7 @@ class CuriousReplay:
         beta=0.7,
         alpha=0.7,
         epsilon=0.01,
-        initial=float('inf'),
+        initial=float("inf"),
         entropy_lambda=0.0,
         branching=16,
         seed=0,
@@ -257,7 +254,7 @@ class CuriousReplay:
         if not np.isfinite(model_loss):
             return self.initial
 
-        count_term = self.c * (self.beta ** visit_count)
+        count_term = self.c * (self.beta**visit_count)
         loss_term = (model_loss + self.epsilon) ** self.alpha
 
         return count_term + loss_term
@@ -331,7 +328,9 @@ class Mixture:
 
     def __init__(self, selectors, fractions, seed=0):
         assert set(selectors.keys()) == set(fractions.keys())
-        assert sum(fractions.values()) == 1, fractions
+        import math
+
+        assert math.isclose(sum(fractions.values()), 1.0, rel_tol=1e-9), fractions
         for key, frac in list(fractions.items()):
             if not frac:
                 selectors.pop(key)
@@ -397,9 +396,7 @@ class TrendMixture(Mixture):
         self.explore_key = explore_key
         self.exploit_key = exploit_key
         self.trend_total = fractions.get(explore_key, 0) + fractions.get(exploit_key, 0)
-        self.static_fracs = {
-            k: v for k, v in fractions.items() if k not in (explore_key, exploit_key)
-        }
+        self.static_fracs = {k: v for k, v in fractions.items() if k not in (explore_key, exploit_key)}
         self.gate = float(gate)
         super().__init__(selectors, self._compose_fractions(), seed=seed)
 
@@ -509,10 +506,7 @@ class SampleTreeNode:
         self.uprob = 0
 
     def __repr__(self):
-        return (
-            f"SampleTreeNode(uprob={self.uprob}, "
-            f"children={[x.uprob for x in self.children]})"
-        )
+        return f"SampleTreeNode(uprob={self.uprob}, " f"children={[x.uprob for x in self.children]})"
 
     def __len__(self):
         return len(self.children)
