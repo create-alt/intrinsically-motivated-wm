@@ -280,6 +280,8 @@ class Decoder(nj.Module):
     bspace: int = 8
     outer: bool = False
     strided: bool = False
+    img_output: str = "mse"      # "mse" or "normal"
+    img_stddev: float = 1.0      # stddev for Normal output (default: 1.0)
 
     def __init__(self, obs_space, **kw):
         assert all(len(s.shape) <= 3 for s in obs_space.values()), obs_space
@@ -377,7 +379,10 @@ class Decoder(nj.Module):
             x = x.reshape((*bshape, *x.shape[1:]))
             split = np.cumsum([self.obs_space[k].shape[-1] for k in self.imgkeys][:-1])
             for k, out in zip(self.imgkeys, jnp.split(x, split, -1)):
-                out = embodied.jax.outs.MSE(out)
+                if self.img_output == "normal":
+                    out = embodied.jax.outs.Normal(out, stddev=self.img_stddev)
+                else:
+                    out = embodied.jax.outs.MSE(out)
                 out = embodied.jax.outs.Agg(out, 3, jnp.sum)
                 recons[k] = out
 

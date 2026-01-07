@@ -84,7 +84,7 @@ class Agent(embodied.jax.Agent):
         self.valnorm = embodied.jax.Normalize(**config.valnorm, name="valnorm")
         self.advnorm = embodied.jax.Normalize(**config.advnorm, name="advnorm")
 
-        self.intrinsic = intrinsic.make_intrinsic_reward(config)
+        self.intrinsic = intrinsic.make_intrinsic_reward(config, decoder=self.dec)
 
         self.modules = [
             self.dyn,

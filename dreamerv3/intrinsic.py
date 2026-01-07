@@ -11,6 +11,42 @@ import ninjax as nj
 f32 = jnp.float32
 
 
+def calc_rew_trend(rewards, decay=0.95):
+    """Compute reward EMA and gradient for trend detection.
+
+    Args:
+        rewards: (Batch, Time) shaped reward tensor
+        decay: Exponential moving average decay rate
+
+    Returns:
+        ema: Moving average (same shape as input)
+        grad: Gradient/change rate (same shape as input)
+    """
+    is_vector = rewards.ndim == 2
+    if is_vector:
+        rewards = rewards[..., None]
+
+    xs = jnp.swapaxes(rewards, 0, 1)  # (Time, Batch, 1)
+
+    def ema_step(carry, x):
+        prev_ema = carry
+        new_ema = decay * prev_ema + (1.0 - decay) * x
+        return new_ema, new_ema
+
+    init = xs[0]
+    _, ema_seq = jax.lax.scan(ema_step, init, xs)
+    ema = jnp.swapaxes(ema_seq, 0, 1)
+
+    prev_ema = jnp.concatenate([ema[:, :1], ema[:, :-1]], axis=1)
+    grad = ema - prev_ema
+
+    if is_vector:
+        ema = ema.squeeze(-1)
+        grad = grad.squeeze(-1)
+
+    return ema, grad
+
+
 class IntrinsicReward(nj.Module):
     """Base class for intrinsic reward computation.
 
@@ -152,21 +188,152 @@ class AdaptiveIntrinsicReward(IntrinsicReward):
         return rew_total, metrics
 
 
+class LexaStyleIntrinsicReward(IntrinsicReward):
+    """LEXA-style intrinsic reward with visual curiosity and trend-based weighting.
+
+    Combines:
+    1. Reward trend detection using EMA gradient
+    2. Visual curiosity from decoder prediction uncertainty (stddev)
+
+    Weighting mechanism:
+    - When reward is increasing (rew_grad > 0): weight_upper activates, favoring exploitation
+    - When reward is stagnating/decreasing (rew_grad <= 0): weight_lower activates, favoring exploration
+
+    total_rew = weight_upper * ext_rew + weight_lower * visual_bonus
+
+    Reference: agent_update.py implementation, LEXA paper
+    """
+
+    enable: bool = False
+    decay: float = 0.95
+    visual_scale: float = 1.0
+    clip_weights: bool = True
+    stop_grad_weights: bool = True
+
+    def __init__(self, decoder=None, **kw):
+        """Initialize with optional decoder reference.
+
+        Args:
+            decoder: Reference to the Decoder module for visual curiosity.
+                     If None, falls back to state uncertainty.
+            **kw: Other configuration parameters
+        """
+        super().__init__(**kw)
+        self._decoder = decoder
+
+    def set_decoder(self, decoder):
+        """Set decoder reference after initialization."""
+        self._decoder = decoder
+
+    def __call__(
+        self,
+        rew_ext: jnp.ndarray,
+        imgfeat: dict,
+        training: bool = True,
+    ) -> tuple:
+        metrics = {}
+
+        if not self.enable:
+            return rew_ext, metrics
+
+        # 1. Compute reward trend
+        rew_ema, rew_grad = calc_rew_trend(rew_ext, decay=self.decay)
+
+        # 2. Compute dynamic weights based on trend
+        if self.clip_weights:
+            weight_lower = jnp.clip(1 - rew_grad, 0.0, 1.0)  # Fires on stagnation/decrease
+            weight_upper = jnp.clip(rew_grad, 0.0, 1.0)      # Fires on increase
+        else:
+            weight_lower = jax.nn.relu(1 - rew_grad)
+            weight_upper = jax.nn.relu(rew_grad)
+
+        # 3. Stop gradient on weights to prevent agent from manipulating them
+        if self.stop_grad_weights:
+            weight_lower = jax.lax.stop_gradient(weight_lower)
+            weight_upper = jax.lax.stop_gradient(weight_upper)
+
+        # 4. Compute visual curiosity bonus
+        if self._decoder is not None:
+            visual_bonus = self._calc_visual_curiosity(imgfeat)
+        else:
+            # Fallback: use state uncertainty
+            stoch = imgfeat['stoch']
+            stoch_flat = stoch.reshape((*stoch.shape[:-2], -1))
+            visual_bonus = jnp.std(f32(stoch_flat), axis=-1)
+
+        visual_bonus = visual_bonus * self.visual_scale
+
+        # 5. Combine rewards with trend-based weighting
+        total_rew = weight_upper * rew_ext + weight_lower * visual_bonus
+
+        # 6. Record metrics
+        metrics['intr/rew_ema_mean'] = rew_ema.mean()
+        metrics['intr/rew_grad_mean'] = rew_grad.mean()
+        metrics['intr/rew_grad_std'] = rew_grad.std()
+        metrics['intr/weight_upper_mean'] = weight_upper.mean()
+        metrics['intr/weight_lower_mean'] = weight_lower.mean()
+        metrics['intr/visual_bonus_mean'] = visual_bonus.mean()
+        metrics['intr/visual_bonus_std'] = visual_bonus.std()
+        metrics['intr/r_ext_mean'] = rew_ext.mean()
+        metrics['intr/r_total_mean'] = total_rew.mean()
+
+        return total_rew, metrics
+
+    def _calc_visual_curiosity(self, feat):
+        """Compute visual curiosity from decoder prediction uncertainty.
+
+        Decodes imagined features to images and uses the prediction
+        stddev as an uncertainty measure (requires Normal output from decoder).
+        """
+        B_K, T = feat['deter'].shape[:2]
+        init_carry = self._decoder.initial(B_K)
+        reset = jnp.zeros((B_K, T), bool)
+
+        # Decode features - recons should be {key: Agg(Normal(...))}
+        _, _, recons = self._decoder(init_carry, feat, reset, training=True)
+
+        def compute_uncertainty(dist):
+            # Handle Agg wrapper
+            if hasattr(dist, 'output'):
+                dist = dist.output
+
+            # Get stddev from Normal distribution
+            if hasattr(dist, 'stddev'):
+                stddev = dist.stddev
+                # Average over spatial dimensions (H, W, C)
+                return stddev.mean(axis=(-3, -2, -1))
+            else:
+                # Fallback for MSE output (no uncertainty available)
+                pred = dist.pred() if hasattr(dist, 'pred') else dist
+                return jnp.zeros(pred.shape[:-3])
+
+        uncertainties_dict = jax.tree.map(compute_uncertainty, recons)
+        uncertainties = jax.tree.leaves(uncertainties_dict)
+
+        if not uncertainties:
+            return jnp.zeros((B_K, T), dtype=jnp.float32)
+
+        total_uncertainty = jnp.mean(jnp.stack(uncertainties), axis=0)
+        return total_uncertainty
+
+
 # Registry for factory pattern (extensibility for future intrinsic reward types)
 REGISTRY = {
     'adaptive': AdaptiveIntrinsicReward,
     'null': NullIntrinsicReward,
+    'lexa_style': LexaStyleIntrinsicReward,
 }
 
 
-def make_intrinsic_reward(config) -> IntrinsicReward:
+def make_intrinsic_reward(config, decoder=None) -> IntrinsicReward:
     """Factory function for creating intrinsic reward modules.
 
     Args:
         config: Configuration object with 'intrinsic' section containing:
             - enable: bool - master switch for intrinsic rewards
-            - typ: str - type of intrinsic reward ('adaptive', 'null')
+            - typ: str - type of intrinsic reward ('adaptive', 'null', 'lexa_style')
             - <typ>: dict - type-specific parameters
+        decoder: Optional decoder reference for visual curiosity (required for lexa_style)
 
     Returns:
         IntrinsicReward instance configured according to config
@@ -174,13 +341,12 @@ def make_intrinsic_reward(config) -> IntrinsicReward:
     Example config:
         intrinsic:
           enable: True
-          typ: adaptive
-          adaptive:
-            beta_max: 0.1
-            rho: 0.1
-            epsilon: 1e-6
-            clip_min: -10.0
-            clip_max: 10.0
+          typ: lexa_style
+          lexa_style:
+            decay: 0.95
+            visual_scale: 1.0
+            clip_weights: True
+            stop_grad_weights: True
     """
     if not config.intrinsic.enable:
         return NullIntrinsicReward(enable=False, name='intrinsic')
@@ -193,6 +359,10 @@ def make_intrinsic_reward(config) -> IntrinsicReward:
         )
 
     cls = REGISTRY[typ]
-    type_config = config.intrinsic[typ]
+    type_config = dict(config.intrinsic[typ])
+
+    # Pass decoder to types that need it
+    if typ == 'lexa_style':
+        return cls(decoder=decoder, enable=True, **type_config, name='intrinsic')
 
     return cls(enable=True, **type_config, name='intrinsic')

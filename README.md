@@ -176,3 +176,8 @@ environments.
 [paper]: https://arxiv.org/pdf/2301.04104
 [website]: https://danijar.com/dreamerv3
 [tweet]: https://twitter.com/danijarh/status/1613161946223677441
+
+
+
+MSE から Normalに変えた
+agent.pyに内発的報酬を加えた

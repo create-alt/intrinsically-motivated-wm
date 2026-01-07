@@ -45,6 +45,48 @@ nvidia-smi
 echo ""
 
 ###############################################################################
+# 実験8: fast=0.001, slow=0.0001
+###############################################################################
+EXP_NAME="exp08_fast0001_slow00001"
+TIME_STR=$(date '+%y%m%d%H%M')
+LOG_DIR="log/${TIME_STR}_dreamerV3_atari100k_ms_pacman_trendmix_${EXP_NAME}"
+mkdir -p ${LOG_DIR}
+echo "=========================================="
+echo "[Experiment 8] ${EXP_NAME}"
+echo "Log directory: ${LOG_DIR}"
+echo "Started at: $(date)"
+echo "=========================================="
+
+python dreamerv3/main.py \
+    --configs atari100k \
+    --task atari100k_ms_pacman \
+    --run.train_ratio 128 \
+    --logdir ${LOG_DIR} \
+    --seed 0 \
+    --agent.dormant.enable True \
+    --agent.dormant.tau 0.025 \
+    --replay.trend.enable True \
+    --replay.trend.fast 0.001 \
+    --replay.trend.slow 0.0001 \
+    --replay.trend.k 5.0 \
+    --replay.trend.eps 1e-6 \
+    --replay.trend.gate_min 0.05 \
+    --replay.trend.gate_max 0.95 \
+    --replay.trend.gate_init 0.5 \
+    --replay.fracs.uniform 0.0 \
+    --replay.fracs.priority 0.0 \
+    --replay.fracs.recency 0.0 \
+    --replay.fracs.curious 0.0 \
+    --replay.fracs.explore 0.5 \
+    --replay.fracs.exploit 0.5 \
+    --jax.platform cuda \
+    --logger.outputs jsonl,wandb \
+    2>&1 | tee ${LOG_DIR}/log.log
+
+echo "[Experiment 8] Finished at: $(date)"
+echo ""
+
+###############################################################################
 # 実験9: k=0.1
 ###############################################################################
 EXP_NAME="exp09_k01"
