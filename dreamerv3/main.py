@@ -230,9 +230,14 @@ def make_replay(config, folder, mode="train"):
         online=config.replay.online,
         chunksize=config.replay.chunksize,
         directory=directory,
+        trend=config.replay.trend if mode == "train" else None,
     )
 
-    use_priority = config.replay.fracs.uniform < 1 or config.replay.fracs.get('curious', 0) > 0
+    use_priority = any(
+        frac > 0
+        for key, frac in config.replay.fracs.items()
+        if key != "uniform"
+    ) or config.replay.fracs.uniform < 1
     if use_priority and mode == "train":
         assert config.jax.compute_dtype in ("bfloat16", "float32"), (
             "Gradient scaling for low-precision training can produce invalid loss "
@@ -245,10 +250,24 @@ def make_replay(config, folder, mode="train"):
             priority=selectors.Prioritized(**config.replay.prio),
             recency=selectors.Recency(recency),
         )
-        # Add CuriousReplay selector if curious fraction > 0
-        if config.replay.fracs.get('curious', 0) > 0:
-            selector_dict['curious'] = selectors.CuriousReplay(**config.replay.curious)
-        kwargs["selector"] = selectors.Mixture(selector_dict, config.replay.fracs)
+        # Add optional selectors when keys exist in fracs, even if fraction is 0.
+        if "curious" in config.replay.fracs:
+            selector_dict["curious"] = selectors.CuriousReplay(**config.replay.curious)
+        if "explore" in config.replay.fracs:
+            selector_dict["explore"] = selectors.Prioritized(**config.replay.prio)
+        if "exploit" in config.replay.fracs:
+            selector_dict["exploit"] = selectors.Prioritized(**config.replay.prio)
+        if config.replay.trend.get("enable", False) and (
+            config.replay.fracs.get("explore", 0) > 0
+            or config.replay.fracs.get("exploit", 0) > 0
+        ):
+            kwargs["selector"] = selectors.TrendMixture(
+                selector_dict,
+                config.replay.fracs,
+                gate=config.replay.trend.get("gate_init", 0.5),
+            )
+        else:
+            kwargs["selector"] = selectors.Mixture(selector_dict, config.replay.fracs)
 
     return embodied.replay.Replay(**kwargs)
 

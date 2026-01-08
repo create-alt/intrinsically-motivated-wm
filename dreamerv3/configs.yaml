@@ -39,12 +39,13 @@ defaults:
   replay:
     size: 5e6
     online: True
-    fracs: {uniform: 1.0, priority: 0.0, recency: 0.0, curious: 0.0}
+    fracs: {uniform: 1.0, priority: 0.0, recency: 0.0, curious: 0.0, explore: 0.0, exploit: 0.0}
     prio: {exponent: 0.8, maxfrac: 0.5, initial: inf, zero_on_sample: True}
-    curious: {c: 1e4, beta: 0.7, alpha: 0.7, epsilon: 0.01, initial: inf}
+    curious: {c: 1e4, beta: 0.7, alpha: 0.7, epsilon: 0.01, initial: inf, entropy_lambda: 0.0}
     priosignal: model
     recexp: 1.0
     chunksize: 1024
+    trend: {enable: False, fast: 0.1, slow: 0.01, k: 5.0, eps: 1e-6, gate_min: 0.05, gate_max: 0.95, gate_init: 0.5}
 
   run:
     steps: 1e10
@@ -95,7 +96,7 @@ defaults:
       simple: {depth: 64, mults: [2, 3, 4, 4], layers: 3, units: 1024, act: silu, norm: rms, winit: trunc_normal_in, symlog: True, outer: False, kernel: 5, strided: False}
     dec:
       typ: simple
-      simple: {depth: 64, mults: [2, 3, 4, 4], layers: 3, units: 1024, act: silu, norm: rms, outscale: 1.0, winit: trunc_normal_in, outer: False, kernel: 5, bspace: 8, strided: False}
+      simple: {depth: 64, mults: [2, 3, 4, 4], layers: 3, units: 1024, act: silu, norm: rms, outscale: 1.0, winit: trunc_normal_in, outer: False, kernel: 5, bspace: 8, strided: False, img_output: mse, img_stddev: 1.0}
     rewhead: {layers: 1, units: 1024, act: silu, norm: rms, output: symexp_twohot, outscale: 0.0, winit: trunc_normal_in, bins: 255}
     conhead: {layers: 1, units: 1024, act: silu, norm: rms, output: binary, outscale: 1.0, winit: trunc_normal_in}
     policy: {layers: 3, units: 1024, act: silu, norm: rms, minstd: 0.1, maxstd: 1.0, outscale: 0.01, unimix: 0.01, winit: trunc_normal_in}
@@ -122,6 +123,7 @@ defaults:
       enable: False
       typ: adaptive
       adaptive: {beta_max: 0.1, rho: 0.1, epsilon: 1e-6, clip_min: -10.0, clip_max: 10.0}
+      lexa_style: {decay: 0.95, visual_scale: 1.0, clip_weights: True, stop_grad_weights: True}
 
 size1m: &size1m
   .*\.rssm: {deter: 512, hidden: 64, classes: 4}
@@ -227,5 +229,5 @@ debug:
 
 curious_replay:
   replay:
-    fracs: {uniform: 0.0, priority: 0.0, recency: 0.0, curious: 1.0}
-    curious: {c: 1e4, beta: 0.7, alpha: 0.7, epsilon: 0.01, initial: inf}
+    fracs: {uniform: 0.0, priority: 0.0, recency: 0.0, curious: 1.0, explore: 0.0, exploit: 0.0}
+    curious: {c: 1e4, beta: 0.7, alpha: 0.7, epsilon: 0.01, initial: inf, entropy_lambda: 0.0}

@@ -104,10 +104,7 @@ class Recency:
                 p = p[segment]
             index = rng.choice(len(segment), p=p)
             path.append(index)
-        index = sum(
-            index * bfactor ** (len(tree) - level - 1)
-            for level, index in enumerate(path)
-        )
+        index = sum(index * bfactor ** (len(tree) - level - 1) for level, index in enumerate(path))
         return index
 
     def _build(self, uprobs, bfactor=16):
@@ -217,6 +214,7 @@ class CuriousReplay:
         alpha: Power term for model loss (default: 0.7)
         epsilon: Numerical stability constant (default: 0.01)
         initial: Initial priority for new items (default: inf)
+        entropy_lambda: Unused placeholder for agent-side priority shaping (default: 0.0)
         branching: Tree branching factor (default: 16)
         seed: Random seed (default: 0)
     """
@@ -227,7 +225,8 @@ class CuriousReplay:
         beta=0.7,
         alpha=0.7,
         epsilon=0.01,
-        initial=float('inf'),
+        initial=float("inf"),
+        entropy_lambda=0.0,
         branching=16,
         seed=0,
     ):
@@ -236,6 +235,7 @@ class CuriousReplay:
         self.alpha = float(alpha)
         self.epsilon = float(epsilon)
         self.initial = float(initial)
+        self.entropy_lambda = float(entropy_lambda)
 
         self.tree = SampleTree(branching, seed)
         self.items = {}  # itemid -> list of stepids
@@ -254,7 +254,7 @@ class CuriousReplay:
         if not np.isfinite(model_loss):
             return self.initial
 
-        count_term = self.c * (self.beta ** visit_count)
+        count_term = self.c * (self.beta**visit_count)
         loss_term = (model_loss + self.epsilon) ** self.alpha
 
         return count_term + loss_term
@@ -328,18 +328,25 @@ class Mixture:
 
     def __init__(self, selectors, fractions, seed=0):
         assert set(selectors.keys()) == set(fractions.keys())
-        assert sum(fractions.values()) == 1, fractions
+        import math
+
+        assert math.isclose(sum(fractions.values()), 1.0, rel_tol=1e-9), fractions
         for key, frac in list(fractions.items()):
             if not frac:
                 selectors.pop(key)
                 fractions.pop(key)
         keys = sorted(selectors.keys())
+        self.names = keys
         self.selectors = [selectors[key] for key in keys]
         self.fractions = np.array([fractions[key] for key in keys], np.float32)
+        self.selector_map = {key: selectors[key] for key in keys}
         self.rng = np.random.default_rng(seed)
 
     def __call__(self):
         return self.rng.choice(self.selectors, p=self.fractions)()
+
+    def __len__(self):
+        return len(self.selectors[0]) if self.selectors else 0
 
     def __setitem__(self, key, stepids):
         for selector in self.selectors:
@@ -350,9 +357,65 @@ class Mixture:
             del selector[key]
 
     def prioritize(self, stepids, priorities):
+        if isinstance(priorities, dict):
+            for name, priority in priorities.items():
+                selector = self.selector_map.get(name)
+                if selector is None:
+                    continue
+                if hasattr(selector, "prioritize"):
+                    selector.prioritize(stepids, priority)
+            return
         for selector in self.selectors:
             if hasattr(selector, "prioritize"):
                 selector.prioritize(stepids, priorities)
+
+
+class TrendMixture(Mixture):
+    """Mixture with a dynamic gate between explore/exploit selectors.
+
+    Args:
+        selectors: Mapping from selector names to selector instances.
+        fractions: Base fractions that sum to 1.0.
+        explore_key: Key name for the explore selector.
+        exploit_key: Key name for the exploit selector.
+        gate: Initial exploit gate in [0, 1].
+        seed: Random seed.
+    Returns:
+        None.
+    """
+
+    def __init__(
+        self,
+        selectors,
+        fractions,
+        explore_key="explore",
+        exploit_key="exploit",
+        gate=0.5,
+        seed=0,
+    ):
+        self.explore_key = explore_key
+        self.exploit_key = exploit_key
+        self.trend_total = fractions.get(explore_key, 0) + fractions.get(exploit_key, 0)
+        self.static_fracs = {k: v for k, v in fractions.items() if k not in (explore_key, exploit_key)}
+        self.gate = float(gate)
+        super().__init__(selectors, self._compose_fractions(), seed=seed)
+
+    def set_gate(self, gate):
+        self.gate = float(np.clip(gate, 0.0, 1.0))
+        fracs = self._compose_fractions()
+        self.fractions = np.array([fracs[name] for name in self.names], np.float32)
+
+    def _compose_fractions(self):
+        fracs = dict(self.static_fracs)
+        explore = self.trend_total * (1 - self.gate)
+        exploit = self.trend_total * self.gate
+        if self.explore_key in fracs or self.trend_total:
+            fracs[self.explore_key] = explore
+        if self.exploit_key in fracs or self.trend_total:
+            fracs[self.exploit_key] = exploit
+        total = sum(fracs.values())
+        assert total > 0, fracs
+        return {k: v / total for k, v in fracs.items()}
 
 
 class SampleTree:
@@ -443,10 +506,7 @@ class SampleTreeNode:
         self.uprob = 0
 
     def __repr__(self):
-        return (
-            f"SampleTreeNode(uprob={self.uprob}, "
-            f"children={[x.uprob for x in self.children]})"
-        )
+        return f"SampleTreeNode(uprob={self.uprob}, " f"children={[x.uprob for x in self.children]})"
 
     def __len__(self):
         return len(self.children)
