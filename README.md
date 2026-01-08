@@ -1,183 +1,63 @@
-# Mastering Diverse Domains through World Models
+# 世界モデルにおける探索「深さ」の制御：内発的報酬の動的重み付け
+**Controlling the Depth of Exploration in World Models: Dynamic Weighting of Intrinsic Rewards**
 
-A reimplementation of [DreamerV3][paper], a scalable and general reinforcement
-learning algorithm that masters a wide range of applications with fixed
-hyperparameters.
+本リポジトリは，世界モデルに基づく強化学習手法![DreamerV3 Tasks](https://user-images.githubusercontent.com/2111293/217647148-cbc522e2-61ad-4553-8e14-1ecdc8d9438b.gif)を基盤として，  
+**内発的報酬が探索挙動（特に想像ロールアウトの進み方／深さ）に与える影響**を調査するための
+研究用実装をまとめたものである[1]．
 
-![DreamerV3 Tasks](https://user-images.githubusercontent.com/2111293/217647148-cbc522e2-61ad-4553-8e14-1ecdc8d9438b.gif)
+本研究では，内発的報酬を単に探索量を増やす信号としてではなく，  
+**探索（exploration）と活用（exploitation）の寄与を動的に調整する要素**として捉え直すことを目的とする．
 
-If you find this code useful, please reference in your paper:
+---
 
-```
-@article{hafner2025dreamerv3,
-  title={Mastering diverse control tasks through world models},
-  author={Hafner, Danijar and Pasukonis, Jurgis and Ba, Jimmy and Lillicrap, Timothy},
-  journal={Nature},
-  pages={1--7},
-  year={2025},
-  publisher={Nature Publishing Group}
-}
-```
+## Base Framework
 
-To learn more:
+本実装は，以下の DreamerV3 の公開実装を基盤として構築されている．
 
-- [Research paper][paper]
-- [Project website][website]
-- [Twitter summary][tweet]
+- DreamerV3 GitHub: https://github.com/danijar/dreamerv3
 
-## DreamerV3
+世界モデルおよび actor–critic 構造の基本設計は原実装に準拠している．  
+本リポジトリは DreamerV3 の再実装だけではなく，研究目的に基づく拡張実装である．
 
-DreamerV3 learns a world model from experiences and uses it to train an actor
-critic policy from imagined trajectories. The world model encodes sensory
-inputs into categorical representations and predicts future representations and
-rewards given actions.
+---
 
-![DreamerV3 Method Diagram](https://user-images.githubusercontent.com/2111293/217355673-4abc0ce5-1a4b-4366-a08d-64754289d659.png)
+## Modifications / 工夫点
 
-DreamerV3 masters a wide range of domains with a fixed set of hyperparameters,
-outperforming specialized methods. Removing the need for tuning reduces the
-amount of expert knowledge and computational resources needed to apply
-reinforcement learning.
+本研究では DreamerV3 の標準構成に対して，主に以下の変更を加えている．
 
-![DreamerV3 Benchmark Scores](https://github.com/danijar/dreamerv3/assets/2111293/0fe8f1cf-6970-41ea-9efc-e2e2477e7861)
+### 1. 再構成損失の分布モデル変更（MSE → Normal）
 
-Due to its robustness, DreamerV3 shows favorable scaling properties. Notably,
-using larger models consistently increases not only its final performance but
-also its data-efficiency. Increasing the number of gradient steps further
-increases data efficiency.
+世界モデルの再構成損失について，従来の平均二乗誤差（MSE）ではなく，  
+**正規分布に基づく尤度（Normal likelihood）**を用いる．
 
-![DreamerV3 Scaling Behavior](https://user-images.githubusercontent.com/2111293/217356063-0cf06b17-89f0-4d5f-85a9-b583438c98dd.png)
+これにより，再構成誤差の **標準偏差**を不確実性の指標として明示的に扱えるようにし，  
+世界モデルの予測不確実性を内発的報酬設計に利用可能とする．
 
-# Instructions
+### 2. 内発的報酬の導入（agent.py）
 
-The code has been tested on Linux and Mac and requires Python 3.11+.
+`agent.py` において，外発的報酬とは別に **内発的報酬**を追加した．  
+内発的報酬は，世界モデルの再構成誤差の不確実性（標準偏差）に基づいて定義され，  
+学習の進行に応じて **探索（exploration）と活用（exploitation）の寄与が変化**するよう設計されている．
 
-## Installation with UV (Recommended)
+---
 
-[UV](https://github.com/astral-sh/uv) is a fast Python package installer and resolver. It provides significantly faster installation times and better dependency resolution than traditional pip.
+## Experimental Setting
 
-### Install UV
+実験は **Atari-100K 設定**下の一部の Atari 環境を対象として行っている．  
+現時点では予備的な実験段階であり，複数環境に対する網羅的な評価や最終性能の比較を目的としていない．
 
-```sh
-# On macOS and Linux
-curl -LsSf https://astral.sh/uv/install.sh | sh
+---
 
-# Or with pip
-pip install uv
-```
+## Disclaimer
 
-### Basic Installation
+本リポジトリは学術研究および教育目的のためのものである．  
+DreamerV3 およびその原実装に関する権利はすべて原著者に帰属する．  
+本研究は，内発的報酬と探索挙動の関係を分析するための実験的・探索的な実装を提供する．
 
-Install DreamerV3 with core dependencies:
+---
 
-```sh
-# Create virtual environment and install
-uv venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-uv pip install -e .
-```
+## Reference
 
-### Install with Environment Support
-
-Install with specific environment support using optional dependencies:
-
-```sh
-# Install with Atari support
-uv pip install -e ".[atari]"
-
-# Install with multiple environments
-uv pip install -e ".[atari,crafter,dmc]"
-
-# Install all standard environments
-uv pip install -e ".[all]"
-
-# Install with development tools
-uv pip install -e ".[all,dev]"
-```
-
-### Special Environments
-
-Some environments require additional installation steps beyond PyPI packages:
-
-**Minecraft**: Requires custom wheel installation
-```sh
-uv pip install -e "."
-uv pip install https://github.com/danijar/minerl/releases/download/v0.4.4-patched/minerl_mirror-0.4.4-cp311-cp311-linux_x86_64.whl
-```
-
-**DMLab**: Requires special installation script (see Dockerfile for details)
-
-## Docker
-
-You can either use the provided `Dockerfile` that contains instructions or
-follow the manual instructions below.
-
-## Manual Installation (Traditional)
-
-Install [JAX][jax] and then the other dependencies:
-
-```sh
-pip install -U -r requirements.txt
-```
-
-Training script:
-
-```sh
-python dreamerv3/main.py \
-  --logdir ~/logdir/dreamer/{timestamp} \
-  --configs crafter \
-  --run.train_ratio 32
-```
-
-To reproduce results, train on the desired task using the corresponding config,
-such as `--configs atari --task atari_pong`.
-
-View results:
-
-```sh
-pip install -U scope
-python -m scope.viewer --basedir ~/logdir --port 8000
-```
-
-Scalar metrics are also writting as JSONL files.
-
-# Tips
-
-- All config options are listed in `dreamerv3/configs.yaml` and you can
-  override them as flags from the command line.
-- The `debug` config block reduces the network size, batch size, duration
-  between logs, and so on for fast debugging (but does not learn a good model).
-- By default, the code tries to run on GPU. You can switch to CPU or TPU using
-  the `--jax.platform cpu` flag.
-- You can use multiple config blocks that will override defaults in the
-  order they are specified, for example `--configs crafter size50m`.
-- By default, metrics are printed to the terminal, appended to a JSON lines
-  file, and written as Scope summaries. Other outputs like WandB and
-  TensorBoard can be enabled in the training script.
-- If you get a `Too many leaves for PyTreeDef` error, it means you're
-  reloading a checkpoint that is not compatible with the current config. This
-  often happens when reusing an old logdir by accident.
-- If you are getting CUDA errors, scroll up because the cause is often just an
-  error that happened earlier, such as out of memory or incompatible JAX and
-  CUDA versions. Try `--batch_size 1` to rule out an out of memory error.
-- Many environments are included, some of which require installing additional
-  packages. See the `Dockerfile` for reference.
-- To continue stopped training runs, simply run the same command line again and
-  make sure that the `--logdir` points to the same directory.
-
-# Disclaimer
-
-This repository contains a reimplementation of DreamerV3 based on the open
-source DreamerV2 code base. It is unrelated to Google or DeepMind. The
-implementation has been tested to reproduce the official results on a range of
-environments.
-
-[jax]: https://github.com/google/jax#pip-installation-gpu-cuda
-[paper]: https://arxiv.org/pdf/2301.04104
-[website]: https://danijar.com/dreamerv3
-[tweet]: https://twitter.com/danijarh/status/1613161946223677441
-
-
-
-MSE から Normalに変えた
-agent.pyに内発的報酬を加えた
+[1] Hafner, D., Pasukonis, J., Ba, J., & Lillicrap, T. (2023).  
+*Mastering diverse domains through world models*, 2024.  
+URL: https://arxiv.org/abs/2301.04104
