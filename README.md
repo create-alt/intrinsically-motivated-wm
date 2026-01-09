@@ -1,46 +1,44 @@
-# Intrinsically Motivated World Model
+# 内発的動機付け世界モデル
 
-A fork of [DreamerV3](https://github.com/danijar/dreamerv3) with exploration enhancements.
+DreamerV3のフォークに対して「内発的報酬」の機能を追加したリポジトリである。
 
-DreamerV3のフォークに様々な「内発的報酬」を追加した実装です。
-
----
-
-## Overview / 概要
-
-[DreamerV3](https://arxiv.org/pdf/2301.04104) learns a world model from experiences and uses it to train an actor-critic policy from imagined trajectories. This fork extends DreamerV3 with intrinsic motivation and advanced replay strategies for improved exploration.
-
-DreamerV3は経験から世界モデルを学習し、想像された軌道からActor-Criticポリシーを訓練します。このフォークでは、**「内発的報酬」** と **「リプレイバッファからのサンプリング方法の工夫（広義の内発的報酬）」** を追加し、性能の向上を目指したものです。
+本リポジトリは DreamerV3 をフォークし、様々な「内発的報酬」の機能を追加した実装である。
 
 ---
 
-## Added Features / 追加機能
+## 概要
 
-This implementation adds three main categories of features:
-
-本実装では、以下の3つのカテゴリの機能を追加しています：
-
-1. **Intrinsic Reward / 内発的報酬** - Reward shaping applied during imagination rollouts / 想像ロールアウト時に適用される報酬形成
-2. **Replay Sampling Strategies / リプレイサンプリング戦略** - Priority-based experience sampling (broadly interpreted as intrinsic motivation) / 優先度ベースの経験サンプリング（広義の内発的報酬）
-3. **Dormant Neuron Monitoring / 休眠ニューロン計測** - Network health diagnostics / ネットワーク健全性診断
+[DreamerV3](https://arxiv.org/pdf/2301.04104) は経験から世界モデルを学習し、想像上の軌道を用いて Actor-Critic を訓練するモデルである。このフォークでは、**「内発的報酬」** および **「リプレイバッファからのサンプリング戦略（広義の内発的報酬）」** を追加することで、探索性能の向上を目指している。
 
 ---
 
-### 1. Intrinsic Reward / 内発的報酬
+## 実験結果
 
-Intrinsic rewards are added to the extrinsic reward during policy learning in imagined trajectories. This encourages exploration by providing bonus rewards for visiting uncertain or novel states.
+実験結果の詳細は [RESULTS.md](RESULTS.md) を参照されたい。
 
-内発的報酬は、想像された軌道でのポリシー学習時に外発的報酬に加算されます。不確実または新規な状態への訪問にボーナス報酬を与えることで、探索を促進します。
+---
 
-#### 1.1 Adaptive Intrinsic Reward
+## 追加機能
 
-Balances exploration and exploitation based on reward acceleration (second derivative of reward). When rewards are accelerating (improving), exploitation is favored; when rewards are stagnating, exploration is encouraged.
+本実装では、主に以下3つの機能カテゴリを追加している：
 
-報酬の加速度（報酬の2階微分）に基づいて探索と活用をバランシングします。報酬が加速している（改善している）ときは活用を優先し、報酬が停滞しているときは探索を促進します。
+1. **Intrinsic Reward / 内発的報酬** - 想像ロールアウト時に適用される報酬形成
+2. **Replay Sampling Strategies / リプレイサンプリング戦略** - 優先度ベースの経験サンプリング（広義の内発的報酬）
+3. **Dormant Neuron Monitoring / 休眠ニューロン計測** - ネットワーク健全性診断
 
-- **Exploration bonus**: `r_explore = Std(s')` (state uncertainty)
-- **Exploitation bonus**: `r_exploit = 1 / (Std(s') + ε)` (state certainty)
-- **Adaptive scaling**: Automatically scales intrinsic reward relative to extrinsic reward magnitude
+---
+
+### 1. 内発的報酬
+
+内発的報酬は、想像上の軌道におけるポリシー学習の際、外発的報酬に加算される。不確実性が高い状態や新規の状態への訪問に対してボーナスを与えることで、探索を促進する。
+
+#### 1.1 適応的内発的報酬 (Adaptive Intrinsic Reward)
+
+報酬の加速度（2階微分）に基づき、探索と活用のバランスを調整する。報酬が増加傾向にある（加速している）場合は活用を優先し、停滞している場合は探索を促進する。
+
+- **Exploration bonus**: `r_explore = Std(s')` (state uncertainty / 状態の不確実性)
+- **Exploitation bonus**: `r_exploit = 1 / (Std(s') + ε)` (state certainty / 状態の確実性)
+- **Adaptive scaling**: Automatically scales intrinsic reward relative to extrinsic reward magnitude / 外発的報酬の大きさに応じて内発的報酬を自動スケーリング
 
 ```yaml
 agent:
@@ -55,14 +53,12 @@ agent:
       clip_max: 10.0
 ```
 
-#### 1.2 LEXA-style Intrinsic Reward
+#### 1.2 LEXA型内発的報酬 (LEXA-style Intrinsic Reward)
 
-Uses decoder prediction uncertainty as visual curiosity signal, combined with reward trend detection via exponential moving average (EMA).
+デコーダの予測不確実性を視覚的な好奇心シグナルとして利用し、指数移動平均（EMA）を用いた報酬トレンド検出と組み合わせる。
 
-デコーダの予測不確実性を視覚的好奇心シグナルとして使用し、指数移動平均（EMA）による報酬トレンド検出と組み合わせます。
-
-- Uses decoder's Normal distribution stddev as uncertainty measure
-- EMA-based reward trend detection for dynamic weighting
+- デコーダの正規分布の標準偏差を不確実性尺度として使用
+- EMAベースの報酬トレンド検出による動的な重み付け
 
 ```yaml
 agent:
@@ -78,38 +74,36 @@ agent:
 
 ---
 
-### 2. Replay Sampling Strategies / リプレイサンプリング戦略
+### 2. リプレイサンプリング戦略
 
-These strategies modify how experiences are sampled from the replay buffer, prioritizing certain transitions to improve learning efficiency. This can be viewed as a form of intrinsic motivation at the data selection level.
 
-これらの戦略は、リプレイバッファからの経験のサンプリング方法を変更し、学習効率を向上させるために特定の遷移を優先します。これはデータ選択レベルでの内発的動機付けの一形態と見なせます。
 
-#### 2.1 Curious Replay
+この戦略では、リプレイバッファからのサンプリング方法を変更し、特定の遷移を優先的に抽出することで学習効率の向上を図る。これはデータ選択レベルにおける内発的動機付けの一形態とみなせる。
 
-Based on [Curious Replay for Model-based Adaptation](https://arxiv.org/abs/2306.15934) (Kauvar et al., ICML 2023). Implementation reference: [cr-dv3](https://github.com/AutonomousAgentsLab/cr-dv3).
+#### 2.1 Curious Replay（サンプリング戦略のベースライン）
 
-Combines count-based novelty with model prediction error:
+[Curious Replay for Model-based Adaptation](https://arxiv.org/abs/2306.15934) (Kauvar et al., ICML 2023) に基づく。実装の参考: [cr-dv3](https://github.com/AutonomousAgentsLab/cr-dv3)。
 
-カウントベースの新規性とモデル予測誤差を組み合わせます：
+カウントベースの新規性とモデル予測誤差を組み合わせた手法である。
 
 ```
 priority = c × β^visit_count + (model_loss + ε)^α
 ```
 
-- **Count-based term**: `c × β^visit_count` - Prioritizes less-visited experiences / 訪問回数が少ない経験を優先
-- **Loss-based term**: `(model_loss + ε)^α` - Prioritizes hard-to-predict transitions / 予測が困難な遷移を優先
+- **Count-based term**: `c × β^visit_count` - 訪問頻度の低い経験を優先
+- **Loss-based term**: `(model_loss + ε)^α` - 予測困難な遷移を優先
 
-**Entropy adjustment (extension):** This implementation adds an optional entropy-based adjustment to the loss term:
 
-**エントロピー調整（拡張）:** 本実装では、損失項にオプションのエントロピーベース調整を追加しています：
+
+**エントロピー調整（拡張機能）:** 本実装では、損失項に対してエントロピーベースの調整をオプションとして追加している：
 
 ```
 adjusted_loss = max(model_loss - λ × entropy(stoch), 0)
 ```
 
-When `entropy_lambda = 0`, the behavior matches the original Curious Replay paper exactly. Setting `λ > 0` reduces priority for transitions where high loss is due to inherent stochasticity rather than model uncertainty.
 
-`entropy_lambda = 0` のとき、元の Curious Replay 論文と完全に一致します。`λ > 0` に設定すると、高い損失がモデルの不確実性ではなく本質的な確率性に起因する遷移の優先度を下げます。
+
+`entropy_lambda = 0` の場合、オリジナルの Curious Replay 論文と完全に一致する挙動となる。`λ > 0` に設定すると、モデルの不確実性ではなく環境の確率的性質（ノイズ）に起因して損失が高くなる遷移の優先度を下げることができる。
 
 ```yaml
 replay:
@@ -123,20 +117,20 @@ replay:
     entropy_lambda: 0.0  # 0 = original paper, >0 = entropy-adjusted
 ```
 
-Or use the preset / プリセットを使用:
+プリセットの使用例：
 ```sh
 --configs atari curious_replay
 ```
 
-#### 2.2 Explore/Exploit Balancing (TrendMixture)
+#### 2.2 探索/活用バランシング (TrendMixture)
 
-Dynamically adjusts the ratio between exploration-focused and exploitation-focused sampling based on reward trends.
 
-報酬トレンドに基づいて、探索重視と活用重視のサンプリング比率を動的に調整します。
 
-- **Explore priority**: `KL(posterior || prior)` - High uncertainty → exploration / 高い不確実性 → 探索
-- **Exploit priority**: `1 / KL` - Low uncertainty → exploitation / 低い不確実性 → 活用
-- **TrendMixture**: Uses fast/slow EMA to detect reward trends and adjust gate / 速い/遅いEMAで報酬トレンドを検出しゲートを調整
+報酬のトレンドに基づき、探索重視のサンプリングと活用重視のサンプリングの比率を動的に調整する。
+
+- **Explore priority**: `KL(posterior || prior)` - 不確実性が高い → とりあえず探索
+- **Exploit priority**: `1 / KL` - 不確実性が低い（自信がある） → 知識を活用
+- **TrendMixture**: スパンの短いEMAと長いEMAを使って報酬のトレンドを検知し、ゲートを調整する
 
 ```yaml
 replay:
@@ -154,20 +148,20 @@ replay:
 
 ---
 
-### 3. Dormant Neuron Monitoring / 休眠ニューロン計測
+### 3. 休眠ニューロン計測
 
-Based on [The Dormant Neuron Phenomenon in Deep Reinforcement Learning](https://arxiv.org/abs/2302.12902) (Sokar et al., ICML 2023).
+[The Dormant Neuron Phenomenon in Deep Reinforcement Learning](https://arxiv.org/abs/2302.12902) (Sokar et al., ICML 2023) に基づく。
 
-Monitors the health of neural network layers by tracking dormant neurons - neurons with very low activation relative to the layer average.
 
-休眠ニューロン（層平均に対して非常に低い活性化を持つニューロン）を追跡することで、ニューラルネットワーク層の健全性を監視します。
 
-**Definition / 定義:**
+休眠ニューロン（層全体の平均に対し、活性化レベルが著しく低いニューロン）を追跡し、ニューラルネットワークの健全性を監視する。
+
+**定義:**
 - Neuron score: `s_i = mean_abs_activation_i / layer_mean`
 - Dormant if: `s_i ≤ τ` (default τ = 0.025)
 - Dormant ratio: Fraction of dormant neurons in a layer
 
-**Monitored components / 監視対象:**
+**監視対象:**
 - World model: tokens, deterministic state, stochastic state, decoder features
 - Reward and continuation heads (per layer)
 - Actor network (per layer)
@@ -180,7 +174,7 @@ agent:
     tau: 0.025  # Dormancy threshold
 ```
 
-**Reported metrics / レポートされるメトリクス:**
+**記録されるメトリクス:**
 - `dormant/world_tokens`, `dormant/world_deter`, `dormant/world_stoch`
 - `dormant/world_all`, `dormant/world_penultimate`
 - `dormant/actor_all`, `dormant/critic_all`
@@ -188,9 +182,9 @@ agent:
 
 ---
 
-## Installation / インストール
+## インストール
 
-Requires Python 3.11+. Install with [UV](https://github.com/astral-sh/uv) (recommended):
+Python 3.11+ が必要である。[UV](https://github.com/astral-sh/uv) を用いたインストールを推奨する:
 
 ```sh
 uv venv
@@ -200,7 +194,7 @@ uv sync
 
 ---
 
-## Quick Start / クイックスタート
+## クイックスタート
 
 ```sh
 python dreamerv3/main.py \
@@ -209,7 +203,7 @@ python dreamerv3/main.py \
   --task atari_ms_pacman
 ```
 
-With Curious Replay / Curious Replayを使用:
+Curious Replay を使う場合:
 ```sh
 python dreamerv3/main.py \
   --logdir ~/logdir/{timestamp} \
@@ -219,17 +213,17 @@ python dreamerv3/main.py \
 
 ---
 
-## License / ライセンス
+## ライセンス
 
 MIT License - Copyright (c) 2024 Danijar Hafner
 
-This fork maintains the original license. See [LICENSE](LICENSE) for details.
+This fork maintains the original license. See [LICENSE](LICENSE) for details. (本フォークはオリジナルのライセンスを維持している。詳細は [LICENSE](LICENSE) を参照されたい。)
 
 ---
 
-## Citation / 引用
+## 引用
 
-If you use this code, please cite the original papers:
+このコードを使用する場合は、原著論文を引用されたい:
 
 **DreamerV3:**
 ```bibtex
@@ -263,7 +257,7 @@ If you use this code, please cite the original papers:
 }
 ```
 
-## Links
+## リンク
 
 - [Original DreamerV3 Repository](https://github.com/danijar/dreamerv3)
 - [DreamerV3 Paper](https://arxiv.org/pdf/2301.04104)
@@ -271,3 +265,5 @@ If you use this code, please cite the original papers:
 - [Curious Replay Repository (cr-dv3)](https://github.com/AutonomousAgentsLab/cr-dv3)
 - [Curious Replay Paper](https://arxiv.org/abs/2306.15934)
 - [Dormant Neuron Paper](https://arxiv.org/abs/2302.12902)
+
+---
