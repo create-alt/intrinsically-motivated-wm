@@ -6,15 +6,41 @@ DreamerV3のフォークに対して「内発的報酬」の機能を追加し�
 
 ---
 
+## 実験結果
+
+実験結果の詳細は [RESULTS.md](RESULTS.md) を参照されたい。
+
+---
+
 ## 概要
 
 [DreamerV3](https://arxiv.org/pdf/2301.04104) は経験から世界モデルを学習し、想像上の軌道を用いて Actor-Critic を訓練するモデルである。このフォークでは、**「内発的報酬」** および **「リプレイバッファからのサンプリング戦略（広義の内発的報酬）」** を追加することで、探索性能の向上を目指している。
 
 ---
 
-## 実験結果
+## 研究背景と目的
 
-実験結果の詳細は [RESULTS.md](RESULTS.md) を参照されたい。
+### 研究課題
+
+**世界モデルにおける探索「深さ」の制御：内発的報酬の動的重み付け**
+
+### 背景
+
+近年、世界モデルに基づく強化学習は、高いサンプル効率と汎用性を背景に注目を集めている。その中でも内発的報酬は、外発的報酬が乏しい環境において探索を促進する重要な要素として広く研究されてきた。
+
+しかし、多くの先行研究は「未知な状態を広く探索する」ことに主眼を置いており、環境中のノイズに過度に反応する Noisy-TV 問題を引き起こす可能性が指摘されている。また、代表的な世界モデル手法である DreamerV3 においても、内発的報酬の設計が学習挙動に与える影響は十分に整理されていない。
+
+### 本研究のアプローチ
+
+本研究では、DreamerV3 を基盤モデルとして採用し、内発的報酬を単なる探索量の増大ではなく、**「特定の状態遷移をどの程度深く探索するか」** を調整する要素として捉え直す。具体的には、世界モデルの再構成誤差の不確実性（標準偏差）に基づき、探索（exploration）と活用（exploitation）の寄与を動的に重み付けする内発的報酬を導入する。
+
+### 予備的知見
+
+Atari-100K 設定下の一部の Atari 環境における予備的な実験では、提案手法が学習初期から中盤にかけて、報酬の推移や探索挙動に特徴的な変化を与える様子が観察された。これらの結果から、内発的報酬の設計が想像ロールアウトの「深さ」に関わる探索挙動に影響を与える可能性が示唆された。
+
+### リサーチギャップ
+
+既存の内発的報酬研究の多くは、探索を「未知な状態をどれだけ広く訪れるか」という観点で捉えており、探索行動の質や深さに着目した議論は限定的である。特に DreamerV3 のような高性能な世界モデルにおいて、内発的報酬が想像ロールアウトの構造や学習挙動にどのような影響を与えるかは、十分に整理されていない。
 
 ---
 
@@ -55,7 +81,7 @@ agent:
 
 #### 1.2 LEXA型内発的報酬 (LEXA-style Intrinsic Reward)
 
-デコーダの予測不確実性を視覚的な好奇心シグナルとして利用し、指数移動平均（EMA）を用いた報酬トレンド検出と組み合わせる。
+[Discovering and Achieving Goals via World Models](https://arxiv.org/abs/2110.09514) (Mendonca et al., ICML 2021) に基づく。デコーダの予測不確実性を視覚的な好奇心シグナルとして利用し、指数移動平均（EMA）を用いた報酬トレンド検出と組み合わせる。
 
 - デコーダの正規分布の標準偏差を不確実性尺度として使用
 - EMAベースの報酬トレンド検出による動的な重み付け
@@ -257,6 +283,16 @@ This fork maintains the original license. See [LICENSE](LICENSE) for details. (�
 }
 ```
 
+**LEXA:**
+```bibtex
+@inproceedings{mendonca2021discovering,
+  title={Discovering and Achieving Goals via World Models},
+  author={Mendonca, Russell and Rybkin, Oleh and Daniilidis, Kostas and Hafner, Danijar and Pathak, Deepak},
+  booktitle={International Conference on Machine Learning},
+  year={2021}
+}
+```
+
 ## リンク
 
 - [Original DreamerV3 Repository](https://github.com/danijar/dreamerv3)
@@ -265,5 +301,6 @@ This fork maintains the original license. See [LICENSE](LICENSE) for details. (�
 - [Curious Replay Repository (cr-dv3)](https://github.com/AutonomousAgentsLab/cr-dv3)
 - [Curious Replay Paper](https://arxiv.org/abs/2306.15934)
 - [Dormant Neuron Paper](https://arxiv.org/abs/2302.12902)
+- [LEXA Paper](https://arxiv.org/abs/2110.09514)
 
 ---
