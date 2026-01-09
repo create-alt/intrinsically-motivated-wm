@@ -10,10 +10,11 @@ sys.path.insert(1, str(folder.parent.parent))
 __package__ = folder.name
 
 import elements
-import embodied
 import numpy as np
 import portal
 import ruamel.yaml as yaml
+
+import embodied
 
 
 def main(argv=None):
@@ -24,9 +25,7 @@ def main(argv=None):
     for name in parsed.configs:
         config = config.update(configs[name])
     config = elements.Flags(config).parse(other)
-    config = config.update(
-        logdir=(config.logdir.format(timestamp=elements.timestamp()))
-    )
+    config = config.update(logdir=(config.logdir.format(timestamp=elements.timestamp())))
     Agent = resolve_agent_class(config)
     [elements.print(line) for line in Agent.banner]
 
@@ -109,15 +108,11 @@ def main(argv=None):
 
     elif config.script == "parallel_env":
         is_eval = config.replica >= args.envs
-        embodied.run.parallel.parallel_env(
-            bind(make_env, config), config.replica, args, is_eval
-        )
+        embodied.run.parallel.parallel_env(bind(make_env, config), config.replica, args, is_eval)
 
     elif config.script == "parallel_envs":
         is_eval = config.replica >= args.envs
-        embodied.run.parallel.parallel_envs(
-            bind(make_env, config), bind(make_env, config), args
-        )
+        embodied.run.parallel.parallel_envs(bind(make_env, config), bind(make_env, config), args)
 
     elif config.script == "parallel_replay":
         embodied.run.parallel.parallel_replay(
@@ -189,23 +184,20 @@ def make_logger(config):
     for output in config.logger.outputs:
         if output == "jsonl":
             outputs.append(elements.logger.JSONLOutput(logdir, "metrics.jsonl"))
-            outputs.append(
-                elements.logger.JSONLOutput(logdir, "scores.jsonl", "episode/score")
-            )
+            outputs.append(elements.logger.JSONLOutput(logdir, "scores.jsonl", "episode/score"))
         elif output == "tensorboard":
             outputs.append(elements.logger.TensorBoardOutput(logdir, config.logger.fps))
         elif output == "expa":
             exp = logdir.split("/")[-4]
             run = "/".join(logdir.split("/")[-3:])
             proj = "embodied" if logdir.startswith(("/cns/", "gs://")) else "debug"
-            outputs.append(
-                elements.logger.ExpaOutput(
-                    exp, run, proj, config.logger.user, config.flat
-                )
-            )
+            outputs.append(elements.logger.ExpaOutput(exp, run, proj, config.logger.user, config.flat))
         elif output == "wandb":
             name = "/".join(logdir.split("/")[-4:])
-            outputs.append(elements.logger.WandBOutput(name))
+            # When videos are disabled, exclude only GIF images (policy_image, openloop/image)
+            # but keep all other metrics (scores, losses, etc.)
+            pattern = r"^(?!.*(policy_image|openloop/image)).*$" if not config.logger.videos else r".*"
+            outputs.append(elements.logger.WandBOutput(name, pattern=pattern))
         elif output == "scope":
             outputs.append(elements.logger.ScopeOutput(elements.Path(logdir)))
         else:
@@ -233,11 +225,9 @@ def make_replay(config, folder, mode="train"):
         trend=config.replay.trend if mode == "train" else None,
     )
 
-    use_priority = any(
-        frac > 0
-        for key, frac in config.replay.fracs.items()
-        if key != "uniform"
-    ) or config.replay.fracs.uniform < 1
+    use_priority = (
+        any(frac > 0 for key, frac in config.replay.fracs.items() if key != "uniform") or config.replay.fracs.uniform < 1
+    )
     if use_priority and mode == "train":
         assert config.jax.compute_dtype in ("bfloat16", "float32"), (
             "Gradient scaling for low-precision training can produce invalid loss "
@@ -258,8 +248,7 @@ def make_replay(config, folder, mode="train"):
         if "exploit" in config.replay.fracs:
             selector_dict["exploit"] = selectors.Prioritized(**config.replay.prio)
         if config.replay.trend.get("enable", False) and (
-            config.replay.fracs.get("explore", 0) > 0
-            or config.replay.fracs.get("exploit", 0) > 0
+            config.replay.fracs.get("explore", 0) > 0 or config.replay.fracs.get("exploit", 0) > 0
         ):
             kwargs["selector"] = selectors.TrendMixture(
                 selector_dict,
@@ -275,8 +264,9 @@ def make_replay(config, folder, mode="train"):
 def make_env(config, index, **overrides):
     suite, task = config.task.split("_", 1)
     if suite == "memmaze":
-        from embodied.envs import from_gym
         import memory_maze  # noqa
+
+        from embodied.envs import from_gym
     ctor = {
         "dummy": "embodied.envs.dummy:Dummy",
         "gym": "embodied.envs.from_gym:FromGym",
