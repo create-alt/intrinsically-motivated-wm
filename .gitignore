@@ -1,24 +1,43 @@
-.pytest_cache
-dist
+# Python
+.pytest_cache/
 __pycache__/
 *.py[cod]
-*.egg-info
-MUJOCO_LOG.TXT
-;
-
-# UV
-.venv/
-#uv.lock
+*.pyo
+*.egg-info/
+*.eggs/
+dist/
+build/
+.mypy_cache/
 
 # Environment variables
 .env
 .env.local
 
+# UV / venv
+.venv/
+#uv.lock
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Logs
 log/
+*.log
+MUJOCO_LOG.TXT
+
+# Project specific
 wandb/
-notebooks/images
+notebooks/images/
+.jax_cache/
 
-.jax_cache
-
-
-cr-dv3/.DS_Store
+# Jupyter
+.ipynb_checkpoints/
