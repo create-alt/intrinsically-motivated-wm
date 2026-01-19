@@ -481,12 +481,15 @@ class Mixture:
 class TrendMixture(Mixture):
     """Mixture with a dynamic gate between explore/exploit selectors.
 
+    Supports both velocity (trend) and acceleration based gating.
+
     Args:
         selectors: Mapping from selector names to selector instances.
         fractions: Base fractions that sum to 1.0.
         explore_key: Key name for the explore selector.
         exploit_key: Key name for the exploit selector.
         gate: Initial exploit gate in [0, 1].
+        velocity_frac: Fraction of trend_total controlled by velocity (0=accel only, 1=velocity only).
         seed: Random seed.
     Returns:
         None.
@@ -499,24 +502,47 @@ class TrendMixture(Mixture):
         explore_key="explore",
         exploit_key="exploit",
         gate=0.5,
+        velocity_frac=0.5,
         seed=0,
     ):
         self.explore_key = explore_key
         self.exploit_key = exploit_key
         self.trend_total = fractions.get(explore_key, 0) + fractions.get(exploit_key, 0)
         self.static_fracs = {k: v for k, v in fractions.items() if k not in (explore_key, exploit_key)}
-        self.gate = float(gate)
+        self.velocity_frac = float(velocity_frac)
+        self.gate_velocity = float(gate)
+        self.gate_accel = float(gate)
+        self.gate = float(gate)  # Keep for backward compatibility
         super().__init__(selectors, self._compose_fractions(), seed=seed)
 
-    def set_gate(self, gate):
-        self.gate = float(np.clip(gate, 0.0, 1.0))
+    def set_gates(self, gate_velocity, gate_accel):
+        """Set both velocity and acceleration gates."""
+        self.gate_velocity = float(np.clip(gate_velocity, 0.0, 1.0))
+        self.gate_accel = float(np.clip(gate_accel, 0.0, 1.0))
         fracs = self._compose_fractions()
         self.fractions = np.array([fracs[name] for name in self.names], np.float32)
 
+    def set_gate(self, gate):
+        """Backward compatible single gate setter (sets both gates to same value)."""
+        self.set_gates(gate, gate)
+
     def _compose_fractions(self):
         fracs = dict(self.static_fracs)
-        explore = self.trend_total * (1 - self.gate)
-        exploit = self.trend_total * self.gate
+
+        # Velocity-based portion
+        v_portion = self.trend_total * self.velocity_frac
+        explore_v = v_portion * (1 - self.gate_velocity)
+        exploit_v = v_portion * self.gate_velocity
+
+        # Acceleration-based portion
+        a_portion = self.trend_total * (1 - self.velocity_frac)
+        explore_a = a_portion * (1 - self.gate_accel)
+        exploit_a = a_portion * self.gate_accel
+
+        # Combine
+        explore = explore_v + explore_a
+        exploit = exploit_v + exploit_a
+
         if self.explore_key in fracs or self.trend_total:
             fracs[self.explore_key] = explore
         if self.exploit_key in fracs or self.trend_total:

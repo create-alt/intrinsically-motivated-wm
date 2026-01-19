@@ -276,6 +276,7 @@ def make_replay(config, folder, mode="train"):
                 selector_dict,
                 config.replay.fracs,
                 gate=config.replay.trend.get("gate_init", 0.5),
+                velocity_frac=config.replay.trend.get("velocity_frac", 0.5),
             )
         else:
             kwargs["selector"] = selectors.Mixture(selector_dict, config.replay.fracs)
