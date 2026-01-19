@@ -46,7 +46,7 @@ defaults:
     priosignal: model
     recexp: 1.0
     chunksize: 1024
-    trend: {enable: False, fast: 0.1, slow: 0.01, k: 5.0, eps: 1e-6, gate_min: 0.05, gate_max: 0.95, gate_init: 0.5}
+    trend: {enable: False, fast: 0.1, slow: 0.01, k: 5.0, eps: 1e-6, gate_min: 0.05, gate_max: 0.95, gate_init: 0.5, priority_mode: kl, curious: {c: 1e4, beta: 0.7, alpha: 0.7, epsilon: 0.01}}
 
   run:
     steps: 1e10

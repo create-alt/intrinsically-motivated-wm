@@ -324,6 +324,114 @@ class CuriousReplay:
                 del self.model_losses[stepid]
 
 
+class CuriousExploreExploit:
+    """Explore/Exploit selector with Curious Replay visit count decay.
+
+    For explore: priority = c * beta^visit_count + agent_priority
+    For exploit: priority = 1 / max(explore_priority, eps)
+    """
+
+    def __init__(
+        self,
+        c=1e4,
+        beta=0.7,
+        is_exploit=False,
+        eps=1e-6,
+        exponent=1.0,
+        initial=float("inf"),
+        zero_on_sample=False,
+        maxfrac=0.0,
+        branching=16,
+        seed=0,
+    ):
+        self.c = float(c)
+        self.beta = float(beta)
+        self.is_exploit = is_exploit
+        self.eps = float(eps)
+        self.exponent = float(exponent)
+        self.initial = float(initial)
+        self.zero_on_sample = zero_on_sample
+        self.maxfrac = maxfrac
+
+        self.tree = SampleTree(branching, seed)
+        self.prios = collections.defaultdict(lambda: self.initial)
+        self.visit_counts = collections.defaultdict(int)
+        self.stepitems = collections.defaultdict(list)
+        self.items = {}
+
+    def __len__(self):
+        return len(self.items)
+
+    def __call__(self):
+        key = self.tree.sample()
+        if self.zero_on_sample:
+            zeros = [0.0] * len(self.items[key])
+            self.prioritize(self.items[key], zeros)
+        return key
+
+    def __setitem__(self, key, stepids):
+        if not isinstance(stepids[0], bytes):
+            stepids = [x.tobytes() for x in stepids]
+        self.items[key] = stepids
+        [self.stepitems[stepid].append(key) for stepid in stepids]
+        self.tree.insert(key, self._aggregate(key))
+
+    def __delitem__(self, key):
+        self.tree.remove(key)
+        stepids = self.items.pop(key)
+        for stepid in stepids:
+            stepitems = self.stepitems[stepid]
+            stepitems.remove(key)
+            if not stepitems:
+                del self.stepitems[stepid]
+                del self.prios[stepid]
+                del self.visit_counts[stepid]
+
+    def prioritize(self, stepids, priorities):
+        if not isinstance(stepids[0], bytes):
+            stepids = [x.tobytes() for x in stepids]
+
+        for stepid, priority in zip(stepids, priorities):
+            try:
+                self.visit_counts[stepid] += 1
+                self.prios[stepid] = priority
+            except KeyError:
+                pass
+
+        items = []
+        for stepid in stepids:
+            items += self.stepitems[stepid]
+        for key in list(set(items)):
+            try:
+                self.tree.update(key, self._aggregate(key))
+            except KeyError:
+                pass
+
+    def _aggregate(self, key):
+        prios = []
+        for stepid in self.items[key]:
+            visit_count = self.visit_counts[stepid]
+            loss_term = self.prios[stepid]
+
+            if not np.isfinite(loss_term):
+                prios.append(self.initial)
+            else:
+                count_term = self.c * (self.beta ** visit_count)
+                explore_prio = count_term + loss_term
+
+                if self.is_exploit:
+                    prios.append(1.0 / max(explore_prio, self.eps))
+                else:
+                    prios.append(explore_prio)
+
+        if self.exponent != 1.0:
+            prios = [x ** self.exponent for x in prios]
+        mean = sum(prios) / len(prios)
+        if self.maxfrac:
+            return self.maxfrac * max(prios) + (1 - self.maxfrac) * mean
+        return mean
+
+
 class Mixture:
 
     def __init__(self, selectors, fractions, seed=0):
