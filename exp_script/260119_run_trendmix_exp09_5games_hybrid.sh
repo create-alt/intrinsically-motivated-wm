@@ -85,7 +85,6 @@ python dreamerv3/main.py \
     --agent.dormant.enable True \
     --agent.dormant.tau 0.025 \
     --replay.trend.enable True \
-    --replay.trend.priority_mode curious \
     --replay.trend.velocity_frac 0.5 \
     --replay.trend.curious.c 1e4 \
     --replay.trend.curious.beta 0.7 \
@@ -134,7 +133,6 @@ python dreamerv3/main.py \
     --agent.dormant.enable True \
     --agent.dormant.tau 0.025 \
     --replay.trend.enable True \
-    --replay.trend.priority_mode curious \
     --replay.trend.velocity_frac 0.5 \
     --replay.trend.curious.c 1e4 \
     --replay.trend.curious.beta 0.7 \
@@ -183,7 +181,6 @@ python dreamerv3/main.py \
     --agent.dormant.enable True \
     --agent.dormant.tau 0.025 \
     --replay.trend.enable True \
-    --replay.trend.priority_mode curious \
     --replay.trend.velocity_frac 0.5 \
     --replay.trend.curious.c 1e4 \
     --replay.trend.curious.beta 0.7 \
@@ -232,7 +229,6 @@ python dreamerv3/main.py \
     --agent.dormant.enable True \
     --agent.dormant.tau 0.025 \
     --replay.trend.enable True \
-    --replay.trend.priority_mode curious \
     --replay.trend.velocity_frac 0.5 \
     --replay.trend.curious.c 1e4 \
     --replay.trend.curious.beta 0.7 \
@@ -281,7 +277,6 @@ python dreamerv3/main.py \
     --agent.dormant.enable True \
     --agent.dormant.tau 0.025 \
     --replay.trend.enable True \
-    --replay.trend.priority_mode curious \
     --replay.trend.velocity_frac 0.5 \
     --replay.trend.curious.c 1e4 \
     --replay.trend.curious.beta 0.7 \
