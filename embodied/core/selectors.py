@@ -324,6 +324,114 @@ class CuriousReplay:
                 del self.model_losses[stepid]
 
 
+class CuriousExploreExploit:
+    """Explore/Exploit selector with Curious Replay visit count decay.
+
+    For explore: priority = c * beta^visit_count + agent_priority
+    For exploit: priority = 1 / max(explore_priority, eps)
+    """
+
+    def __init__(
+        self,
+        c=1e4,
+        beta=0.7,
+        is_exploit=False,
+        eps=1e-6,
+        exponent=1.0,
+        initial=float("inf"),
+        zero_on_sample=False,
+        maxfrac=0.0,
+        branching=16,
+        seed=0,
+    ):
+        self.c = float(c)
+        self.beta = float(beta)
+        self.is_exploit = is_exploit
+        self.eps = float(eps)
+        self.exponent = float(exponent)
+        self.initial = float(initial)
+        self.zero_on_sample = zero_on_sample
+        self.maxfrac = maxfrac
+
+        self.tree = SampleTree(branching, seed)
+        self.prios = collections.defaultdict(lambda: self.initial)
+        self.visit_counts = collections.defaultdict(int)
+        self.stepitems = collections.defaultdict(list)
+        self.items = {}
+
+    def __len__(self):
+        return len(self.items)
+
+    def __call__(self):
+        key = self.tree.sample()
+        if self.zero_on_sample:
+            zeros = [0.0] * len(self.items[key])
+            self.prioritize(self.items[key], zeros)
+        return key
+
+    def __setitem__(self, key, stepids):
+        if not isinstance(stepids[0], bytes):
+            stepids = [x.tobytes() for x in stepids]
+        self.items[key] = stepids
+        [self.stepitems[stepid].append(key) for stepid in stepids]
+        self.tree.insert(key, self._aggregate(key))
+
+    def __delitem__(self, key):
+        self.tree.remove(key)
+        stepids = self.items.pop(key)
+        for stepid in stepids:
+            stepitems = self.stepitems[stepid]
+            stepitems.remove(key)
+            if not stepitems:
+                del self.stepitems[stepid]
+                del self.prios[stepid]
+                del self.visit_counts[stepid]
+
+    def prioritize(self, stepids, priorities):
+        if not isinstance(stepids[0], bytes):
+            stepids = [x.tobytes() for x in stepids]
+
+        for stepid, priority in zip(stepids, priorities):
+            try:
+                self.visit_counts[stepid] += 1
+                self.prios[stepid] = priority
+            except KeyError:
+                pass
+
+        items = []
+        for stepid in stepids:
+            items += self.stepitems[stepid]
+        for key in list(set(items)):
+            try:
+                self.tree.update(key, self._aggregate(key))
+            except KeyError:
+                pass
+
+    def _aggregate(self, key):
+        prios = []
+        for stepid in self.items[key]:
+            visit_count = self.visit_counts[stepid]
+            loss_term = self.prios[stepid]
+
+            if not np.isfinite(loss_term):
+                prios.append(self.initial)
+            else:
+                count_term = self.c * (self.beta ** visit_count)
+                explore_prio = count_term + loss_term
+
+                if self.is_exploit:
+                    prios.append(1.0 / max(explore_prio, self.eps))
+                else:
+                    prios.append(explore_prio)
+
+        if self.exponent != 1.0:
+            prios = [x ** self.exponent for x in prios]
+        mean = sum(prios) / len(prios)
+        if self.maxfrac:
+            return self.maxfrac * max(prios) + (1 - self.maxfrac) * mean
+        return mean
+
+
 class Mixture:
 
     def __init__(self, selectors, fractions, seed=0):
@@ -373,12 +481,15 @@ class Mixture:
 class TrendMixture(Mixture):
     """Mixture with a dynamic gate between explore/exploit selectors.
 
+    Supports both velocity (trend) and acceleration based gating.
+
     Args:
         selectors: Mapping from selector names to selector instances.
         fractions: Base fractions that sum to 1.0.
         explore_key: Key name for the explore selector.
         exploit_key: Key name for the exploit selector.
         gate: Initial exploit gate in [0, 1].
+        velocity_frac: Fraction of trend_total controlled by velocity (0=accel only, 1=velocity only).
         seed: Random seed.
     Returns:
         None.
@@ -391,24 +502,47 @@ class TrendMixture(Mixture):
         explore_key="explore",
         exploit_key="exploit",
         gate=0.5,
+        velocity_frac=0.5,
         seed=0,
     ):
         self.explore_key = explore_key
         self.exploit_key = exploit_key
         self.trend_total = fractions.get(explore_key, 0) + fractions.get(exploit_key, 0)
         self.static_fracs = {k: v for k, v in fractions.items() if k not in (explore_key, exploit_key)}
-        self.gate = float(gate)
+        self.velocity_frac = float(velocity_frac)
+        self.gate_velocity = float(gate)
+        self.gate_accel = float(gate)
+        self.gate = float(gate)  # Keep for backward compatibility
         super().__init__(selectors, self._compose_fractions(), seed=seed)
 
-    def set_gate(self, gate):
-        self.gate = float(np.clip(gate, 0.0, 1.0))
+    def set_gates(self, gate_velocity, gate_accel):
+        """Set both velocity and acceleration gates."""
+        self.gate_velocity = float(np.clip(gate_velocity, 0.0, 1.0))
+        self.gate_accel = float(np.clip(gate_accel, 0.0, 1.0))
         fracs = self._compose_fractions()
         self.fractions = np.array([fracs[name] for name in self.names], np.float32)
 
+    def set_gate(self, gate):
+        """Backward compatible single gate setter (sets both gates to same value)."""
+        self.set_gates(gate, gate)
+
     def _compose_fractions(self):
         fracs = dict(self.static_fracs)
-        explore = self.trend_total * (1 - self.gate)
-        exploit = self.trend_total * self.gate
+
+        # Velocity-based portion
+        v_portion = self.trend_total * self.velocity_frac
+        explore_v = v_portion * (1 - self.gate_velocity)
+        exploit_v = v_portion * self.gate_velocity
+
+        # Acceleration-based portion
+        a_portion = self.trend_total * (1 - self.velocity_frac)
+        explore_a = a_portion * (1 - self.gate_accel)
+        exploit_a = a_portion * self.gate_accel
+
+        # Combine
+        explore = explore_v + explore_a
+        exploit = exploit_v + exploit_a
+
         if self.explore_key in fracs or self.trend_total:
             fracs[self.explore_key] = explore
         if self.exploit_key in fracs or self.trend_total:

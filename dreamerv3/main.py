@@ -244,9 +244,31 @@ def make_replay(config, folder, mode="train"):
         if "curious" in config.replay.fracs:
             selector_dict["curious"] = selectors.CuriousReplay(**config.replay.curious)
         if "explore" in config.replay.fracs:
-            selector_dict["explore"] = selectors.Prioritized(**config.replay.prio)
+            priority_mode = config.replay.trend.get("priority_mode", "kl")
+            if priority_mode == "curious":
+                curious_cfg = config.replay.trend.get("curious", {})
+                selector_dict["explore"] = selectors.CuriousExploreExploit(
+                    c=curious_cfg.get("c", 1e4),
+                    beta=curious_cfg.get("beta", 0.7),
+                    is_exploit=False,
+                    eps=config.replay.trend.eps,
+                    **config.replay.prio
+                )
+            else:
+                selector_dict["explore"] = selectors.Prioritized(**config.replay.prio)
         if "exploit" in config.replay.fracs:
-            selector_dict["exploit"] = selectors.Prioritized(**config.replay.prio)
+            priority_mode = config.replay.trend.get("priority_mode", "kl")
+            if priority_mode == "curious":
+                curious_cfg = config.replay.trend.get("curious", {})
+                selector_dict["exploit"] = selectors.CuriousExploreExploit(
+                    c=curious_cfg.get("c", 1e4),
+                    beta=curious_cfg.get("beta", 0.7),
+                    is_exploit=True,
+                    eps=config.replay.trend.eps,
+                    **config.replay.prio
+                )
+            else:
+                selector_dict["exploit"] = selectors.Prioritized(**config.replay.prio)
         if config.replay.trend.get("enable", False) and (
             config.replay.fracs.get("explore", 0) > 0 or config.replay.fracs.get("exploit", 0) > 0
         ):
@@ -254,6 +276,7 @@ def make_replay(config, folder, mode="train"):
                 selector_dict,
                 config.replay.fracs,
                 gate=config.replay.trend.get("gate_init", 0.5),
+                velocity_frac=config.replay.trend.get("velocity_frac", 0.5),
             )
         else:
             kwargs["selector"] = selectors.Mixture(selector_dict, config.replay.fracs)

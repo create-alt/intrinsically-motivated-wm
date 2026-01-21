@@ -71,12 +71,17 @@ class Replay:
             self.trend_gate_min = float(self.trend.get("gate_min", 0.0))
             self.trend_gate_max = float(self.trend.get("gate_max", 1.0))
             self.trend_gate = float(self.trend.get("gate_init", 0.5))
+            self.trend_velocity_frac = float(self.trend.get("velocity_frac", 0.5))
+            self.trend_gate_velocity = float(self.trend.get("gate_init", 0.5))
+            self.trend_gate_accel = float(self.trend.get("gate_init", 0.5))
             self.trend_fast_ema = None
             self.trend_slow_ema = None
             self.trend_prev = 0.0
             self.trend_lock = threading.Lock()
             self.trend_returns = defaultdict(float)
-            if hasattr(self.sampler, "set_gate"):
+            if hasattr(self.sampler, "set_gates"):
+                self.sampler.set_gates(self.trend_gate_velocity, self.trend_gate_accel)
+            elif hasattr(self.sampler, "set_gate"):
                 self.sampler.set_gate(self.trend_gate)
 
     def __len__(self):
@@ -449,11 +454,25 @@ class Replay:
                 trend = self.trend_fast_ema - self.trend_slow_ema
             accel = trend - self.trend_prev
             self.trend_prev = trend
-            x = np.clip(self.trend_k * accel, -60.0, 60.0)
-            gate = 1.0 / (1.0 + np.exp(-x))
-            gate = np.clip(gate, self.trend_gate_min, self.trend_gate_max)
-            self.trend_gate = float(gate)
-            if hasattr(self.sampler, "set_gate"):
+
+            # Velocity gate (based on trend)
+            x_v = np.clip(self.trend_k * trend, -60.0, 60.0)
+            gate_v = 1.0 / (1.0 + np.exp(-x_v))
+            gate_v = np.clip(gate_v, self.trend_gate_min, self.trend_gate_max)
+            self.trend_gate_velocity = float(gate_v)
+
+            # Acceleration gate (based on accel)
+            x_a = np.clip(self.trend_k * accel, -60.0, 60.0)
+            gate_a = 1.0 / (1.0 + np.exp(-x_a))
+            gate_a = np.clip(gate_a, self.trend_gate_min, self.trend_gate_max)
+            self.trend_gate_accel = float(gate_a)
+
+            # Keep legacy gate for backward compatibility
+            self.trend_gate = float(gate_a)
+
+            if hasattr(self.sampler, "set_gates"):
+                self.sampler.set_gates(self.trend_gate_velocity, self.trend_gate_accel)
+            elif hasattr(self.sampler, "set_gate"):
                 self.sampler.set_gate(self.trend_gate)
 
     def _numitems(self, chunks):

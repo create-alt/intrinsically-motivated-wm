@@ -191,17 +191,37 @@ class Agent(embodied.jax.Agent):
             outs["replay"]["priority_curious"] = priority
             if self.config.replay.fracs.get("priority", 0) > 0:
                 outs["replay"]["priority"] = priority
-        # Add explore/exploit priorities from KL(post || prior).
+        # Add explore/exploit priorities based on configured mode.
         if (
             self.config.replay.fracs.get("explore", 0) > 0
             or self.config.replay.fracs.get("exploit", 0) > 0
         ):
             if "replay" not in outs:
                 outs["replay"] = {"stepid": stepid}
-            kl = loss_outs["losses"]["rep"]
+
+            priority_mode = self.config.replay.trend.get("priority_mode", "kl")
             eps = self.config.replay.trend.eps
-            outs["replay"]["priority_explore"] = kl
-            outs["replay"]["priority_exploit"] = 1.0 / jnp.maximum(kl, eps)
+
+            if priority_mode == "kl":
+                # Mode 1: KL-based (current implementation)
+                kl = loss_outs["losses"]["rep"]
+                outs["replay"]["priority_explore"] = kl
+                outs["replay"]["priority_exploit"] = 1.0 / jnp.maximum(kl, eps)
+
+            elif priority_mode == "curious":
+                # Mode 2: Curious Replay-based
+                # model_loss only, visit_count is managed by selector
+                model_loss = loss_outs["model_loss"]
+                curious_cfg = self.config.replay.trend.curious
+                alpha = curious_cfg.get("alpha", 0.7)
+                epsilon = curious_cfg.get("epsilon", 0.01)
+
+                loss_term = (model_loss + epsilon) ** alpha
+                outs["replay"]["priority_explore"] = loss_term
+                outs["replay"]["priority_exploit"] = 1.0 / jnp.maximum(loss_term, eps)
+
+            else:
+                raise ValueError(f"Unknown priority_mode: {priority_mode}")
         carry = (*carry, {k: data[k][:, -1] for k in self.act_space})
         return carry, outs, metrics
 
