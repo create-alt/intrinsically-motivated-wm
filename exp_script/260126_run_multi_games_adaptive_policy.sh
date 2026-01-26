@@ -76,7 +76,7 @@ python dreamerv3/main.py \
     --agent.dormant.tau 0.025 \
     --agent.adaptive_policy.enable True \
     --jax.platform cuda \
-    --jax.prealloc False \
+    --jax.profiler False \
     --logger.outputs jsonl,wandb \
     --logger.videos False \
     2>&1 | tee ${LOG_DIR}/log.log
@@ -109,7 +109,7 @@ python dreamerv3/main.py \
     --agent.dormant.tau 0.025 \
     --agent.adaptive_policy.enable True \
     --jax.platform cuda \
-    --jax.prealloc False \
+    --jax.profiler False \
     --logger.outputs jsonl,wandb \
     --logger.videos False \
     2>&1 | tee ${LOG_DIR}/log.log
@@ -142,7 +142,7 @@ python dreamerv3/main.py \
     --agent.dormant.tau 0.025 \
     --agent.adaptive_policy.enable True \
     --jax.platform cuda \
-    --jax.prealloc False \
+    --jax.profiler False \
     --logger.outputs jsonl,wandb \
     --logger.videos False \
     2>&1 | tee ${LOG_DIR}/log.log
@@ -175,7 +175,7 @@ python dreamerv3/main.py \
     --agent.dormant.tau 0.025 \
     --agent.adaptive_policy.enable True \
     --jax.platform cuda \
-    --jax.prealloc False \
+    --jax.profiler False \
     --logger.outputs jsonl,wandb \
     --logger.videos False \
     2>&1 | tee ${LOG_DIR}/log.log
@@ -208,7 +208,7 @@ python dreamerv3/main.py \
     --agent.dormant.tau 0.025 \
     --agent.adaptive_policy.enable True \
     --jax.platform cuda \
-    --jax.prealloc False \
+    --jax.profiler False \
     --logger.outputs jsonl,wandb \
     --logger.videos False \
     2>&1 | tee ${LOG_DIR}/log.log
