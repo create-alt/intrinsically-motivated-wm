@@ -86,6 +86,28 @@ class Agent(embodied.jax.Agent):
 
         self.intrinsic = intrinsic.make_intrinsic_reward(config, decoder=self.dec)
 
+        # --- AdaptivePolicy Exploration Networks ---
+        if config.adaptive_policy.enable:
+            self.pol_small = embodied.jax.MLPHead(act_space, outs, **config.policy, name='pol_small')
+            self.val_small = embodied.jax.MLPHead(scalar, **config.value, name='val_small')
+            self.slowval_small = embodied.jax.SlowModel(
+                embodied.jax.MLPHead(scalar, **config.value, name='slowval_small'),
+                source=self.val_small, **config.slowvalue)
+
+            self.pol_large = embodied.jax.MLPHead(act_space, outs, **config.policy, name='pol_large')
+            self.val_large = embodied.jax.MLPHead(scalar, **config.value, name='val_large')
+            self.slowval_large = embodied.jax.SlowModel(
+                embodied.jax.MLPHead(scalar, **config.value, name='slowval_large'),
+                source=self.val_large, **config.slowvalue)
+
+            # AdaptivePolicy parameters
+            self.span_short = config.adaptive_policy.ema_span_short
+            self.span_long = config.adaptive_policy.ema_span_long
+            self.alpha_small = config.adaptive_policy.target_std_small
+            self.alpha_large = config.adaptive_policy.target_std_large
+            self.explore_limit = config.adaptive_policy.explore_limit
+            self.default_force = config.adaptive_policy.default_force
+
         self.modules = [
             self.dyn,
             self.enc,
@@ -95,6 +117,8 @@ class Agent(embodied.jax.Agent):
             self.pol,
             self.val,
         ]
+        if config.adaptive_policy.enable:
+            self.modules.extend([self.pol_small, self.val_small, self.pol_large, self.val_large])
         self.opt = embodied.jax.Optimizer(self.modules, self._make_opt(**config.opt), summary_depth=1, name="opt")
 
         scales = self.config.loss_scales.copy()
@@ -104,6 +128,8 @@ class Agent(embodied.jax.Agent):
 
     @property
     def policy_keys(self):
+        if self.config.adaptive_policy.enable:
+            return "^(enc|dyn|dec|pol|pol_small|pol_large)/"
         return "^(enc|dyn|dec|pol)/"
 
     @property
@@ -125,12 +151,22 @@ class Agent(embodied.jax.Agent):
 
     def init_policy(self, batch_size):
         zeros = lambda x: jnp.zeros((batch_size, *x.shape), x.dtype)
-        return (
+        base = (
             self.enc.initial(batch_size),
             self.dyn.initial(batch_size),
             self.dec.initial(batch_size),
-            jax.tree.map(zeros, self.act_space),
         )
+        if self.config.adaptive_policy.enable:
+            # EMA State: (mean_short, mean_long, diff_short, diff_long, count)
+            ema_state = (
+                jnp.zeros((batch_size,), jnp.float32),  # mean_short
+                jnp.zeros((batch_size,), jnp.float32),  # mean_long
+                jnp.zeros((batch_size,), jnp.float32),  # diff_short
+                jnp.zeros((batch_size,), jnp.float32),  # diff_long
+                jnp.zeros((batch_size,), jnp.int32),    # count
+            )
+            return (*base, ema_state, jax.tree.map(zeros, self.act_space))
+        return (*base, jax.tree.map(zeros, self.act_space))
 
     def init_train(self, batch_size):
         return self.init_policy(batch_size)
@@ -139,6 +175,11 @@ class Agent(embodied.jax.Agent):
         return self.init_policy(batch_size)
 
     def policy(self, carry, obs, mode="train"):
+        if self.config.adaptive_policy.enable:
+            return self._policy_adaptive(carry, obs, mode)
+        return self._policy_default(carry, obs, mode)
+
+    def _policy_default(self, carry, obs, mode="train"):
         (enc_carry, dyn_carry, dec_carry, prevact) = carry
         kw = dict(training=False, single=True)
         reset = obs["is_first"]
@@ -161,11 +202,100 @@ class Agent(embodied.jax.Agent):
             out.update(elements.tree.flatdict(dict(enc=enc_entry, dyn=dyn_entry, dec=dec_entry)))
         return carry, act, out
 
+    def _policy_adaptive(self, carry, obs, mode="train"):
+        # Unpack 5-element carry
+        (enc_carry, dyn_carry, dec_carry, ema_state, prevact) = carry
+
+        kw = dict(training=False, single=True)
+        reset = obs["is_first"]
+        enc_carry, enc_entry, tokens = self.enc(enc_carry, obs, reset, **kw)
+        dyn_carry, dyn_entry, feat = self.dyn.observe(dyn_carry, tokens, prevact, reset, **kw)
+        dec_entry = {}
+        if dec_carry:
+            dec_carry, dec_entry, recons = self.dec(dec_carry, feat, reset, **kw)
+
+        inp = self.feat2tensor(feat)
+
+        # 1. Generate Action Candidates from all 3 policies
+        pol_def = self.pol(inp, bdims=1)
+        act_def = sample(pol_def)
+
+        pol_s = self.pol_small(inp, bdims=1)
+        act_s = sample(pol_s)
+
+        pol_l = self.pol_large(inp, bdims=1)
+        act_l = sample(pol_l)
+
+        # 2. Update EMA State
+        mean_s, mean_l, diff_s, diff_l, count = ema_state
+        reward = obs["reward"]  # shape (Batch,)
+
+        def update_ema(prev, x, span):
+            decay = (span - 1) / span
+            return decay * prev + (1 - decay) * x
+
+        # Calculate new means
+        new_mean_s = update_ema(mean_s, reward, self.span_short)
+        new_mean_l = update_ema(mean_l, reward, self.span_long)
+
+        # Calculate diffs (new - old)
+        new_diff_s = new_mean_s - mean_s
+        new_diff_l = new_mean_l - mean_l
+
+        # 3. Switching Logic
+        s_up = new_diff_s > 0
+        l_up = new_diff_l > 0
+
+        use_default_cond = s_up & l_up
+        use_small_cond = (~s_up) & l_up
+
+        is_forcing = count >= self.explore_limit
+        should_reset = count >= (self.explore_limit + self.default_force)
+
+        final_use_def = use_default_cond | is_forcing
+        final_use_small = (~final_use_def) & use_small_cond
+
+        # Select Action
+        def select_act(a_def, a_s, a_l):
+            a_mix = jnp.where(final_use_small, a_s, a_l)
+            return jnp.where(final_use_def, a_def, a_mix)
+
+        act = jax.tree.map(select_act, act_def, act_s, act_l)
+
+        # Update Count
+        # Default (voluntary) -> reset to 0
+        # Forcing end -> reset to 0
+        # Otherwise -> increment
+        new_count = jnp.where(use_default_cond & (~is_forcing), 0, count + 1)
+        new_count = jnp.where(should_reset, 0, new_count)
+
+        # Pack new EMA state
+        new_ema_state = (new_mean_s, new_mean_l, new_diff_s, new_diff_l, new_count)
+
+        out = {}
+        out["finite"] = elements.tree.flatdict(
+            jax.tree.map(
+                lambda x: jnp.isfinite(x).all(range(1, x.ndim)),
+                dict(obs=obs, carry=carry, tokens=tokens, feat=feat, act=act),
+            )
+        )
+
+        # Return new carry with 5 elements
+        carry = (enc_carry, dyn_carry, dec_carry, new_ema_state, act)
+
+        if self.config.replay_context:
+            out.update(elements.tree.flatdict(dict(enc=enc_entry, dyn=dyn_entry, dec=dec_entry)))
+
+        return carry, act, out
+
     def train(self, carry, data):
         carry, obs, prevact, stepid = self._apply_replay_context(carry, data)
         metrics, (carry, entries, loss_outs, mets) = self.opt(self.loss, carry, obs, prevact, training=True, has_aux=True)
         metrics.update(mets)
         self.slowval.update()
+        if self.config.adaptive_policy.enable:
+            self.slowval_small.update()
+            self.slowval_large.update()
         outs = {}
         if self.config.replay_context:
             updates = elements.tree.flatdict(dict(stepid=stepid, enc=entries[0], dyn=entries[1], dec=entries[2]))
@@ -232,7 +362,12 @@ class Agent(embodied.jax.Agent):
         return carry, outs, metrics
 
     def loss(self, carry, obs, prevact, training, return_features=False):
-        enc_carry, dyn_carry, dec_carry = carry
+        # Unpack carry based on adaptive_policy mode
+        if self.config.adaptive_policy.enable:
+            enc_carry, dyn_carry, dec_carry, ema_state = carry
+        else:
+            enc_carry, dyn_carry, dec_carry = carry
+
         reset = obs["is_first"]
         B, T = reset.shape
         losses = {}
@@ -264,72 +399,160 @@ class Agent(embodied.jax.Agent):
         K = min(self.config.imag_last or T, T)
         H = self.config.imag_length
         starts = self.dyn.starts(dyn_entries, dyn_carry, K)
-        policyfn = lambda feat: sample(self.pol(self.feat2tensor(feat), 1))
-        _, imgfeat, imgprevact = self.dyn.imagine(starts, policyfn, H, training)
-        first = jax.tree.map(lambda x: x[:, -K:].reshape((B * K, 1, *x.shape[2:])), repfeat)
-        imgfeat = concat([sg(first, skip=self.config.ac_grads), sg(imgfeat)], 1)
-        lastact = policyfn(jax.tree.map(lambda x: x[:, -1], imgfeat))
-        lastact = jax.tree.map(lambda x: x[:, None], lastact)
-        imgact = concat([imgprevact, lastact], 1)
-        assert all(x.shape[:2] == (B * K, H + 1) for x in jax.tree.leaves(imgfeat))
-        assert all(x.shape[:2] == (B * K, H + 1) for x in jax.tree.leaves(imgact))
-        inp = self.feat2tensor(imgfeat)
+        starts = sg(starts)
 
-        # Extrinsic reward prediction
-        rew_ext = self.rew(inp, 2).pred()
+        if self.config.adaptive_policy.enable:
+            # --- AdaptivePolicy: Train all 3 policies ---
+            def compute_policy_loss(policy_net, value_net, slowval_net, reward_fn_type='default', suffix=''):
+                policyfn = lambda feat: sample(policy_net(self.feat2tensor(feat), 1))
 
-        # Apply intrinsic reward augmentation
-        rew_total, intr_mets = self.intrinsic(rew_ext, imgfeat, training)
-        metrics.update(intr_mets)
+                _, imgfeat, imgprevact = self.dyn.imagine(starts, policyfn, H, training)
 
-        los, imgloss_out, mets = imag_loss(
-            imgact,
-            rew_total,
-            self.con(inp, 2).prob(1),
-            self.pol(inp, 2),
-            self.val(inp, 2),
-            self.slowval(inp, 2),
-            self.retnorm,
-            self.valnorm,
-            self.advnorm,
-            update=training,
-            contdisc=self.config.contdisc,
-            horizon=self.config.horizon,
-            **self.config.imag_loss,
-        )
-        losses.update({k: v.mean(1).reshape((B, K)) for k, v in los.items()})
-        metrics.update(mets)
+                first = jax.tree.map(
+                    lambda x: x[:, -K:].reshape((B * K, 1, *x.shape[2:])), repfeat)
+                first = sg(first)
 
-        # Replay
-        if self.config.repval_loss:
-            feat = sg(repfeat, skip=self.config.repval_grad)
-            last, term, rew = [obs[k] for k in ("is_last", "is_terminal", "reward")]
-            boot = imgloss_out["ret"][:, 0].reshape(B, K)
-            feat, last, term, rew, boot = jax.tree.map(lambda x: x[:, -K:], (feat, last, term, rew, boot))
-            inp = self.feat2tensor(feat)
-            los, reploss_out, mets = repl_loss(
-                last,
-                term,
-                rew,
-                boot,
+                imgfeat = concat([first, imgfeat], 1)
+                lastact = policyfn(jax.tree.map(lambda x: x[:, -1], imgfeat))
+                lastact = jax.tree.map(lambda x: x[:, None], lastact)
+                imgact = concat([imgprevact, lastact], 1)
+
+                inp_img = self.feat2tensor(imgfeat)
+
+                if reward_fn_type == 'default':
+                    # Use extrinsic + intrinsic reward
+                    rew_ext = self.rew(inp_img, 2).pred()
+                    reward, intr_mets = self.intrinsic(rew_ext, imgfeat, training)
+                else:
+                    # Use entropy-based shaping reward for exploration policies
+                    logits = imgfeat['logit']
+                    # Compute std from stochastic distribution
+                    # logits shape: (B*K, H+1, stoch, classes)
+                    probs = jax.nn.softmax(logits, axis=-1)
+                    entropy = -jnp.sum(probs * jnp.log(probs + 1e-8), axis=-1)  # per stoch dim
+                    std_agg = jnp.mean(entropy, axis=-1)  # average over stoch dims
+
+                    target_alpha = self.alpha_small if reward_fn_type == 'small' else self.alpha_large
+                    eps = 1e-4
+                    dist_sq = jnp.square(std_agg - target_alpha)
+                    reward = jnp.clip(1.0 / (dist_sq + eps), 0.0, 1.0)
+
+                los, _, mets = imag_loss(
+                    imgact,
+                    reward,
+                    self.con(inp_img, 2).prob(1),
+                    policy_net(inp_img, 2),
+                    value_net(inp_img, 2),
+                    slowval_net(inp_img, 2),
+                    self.retnorm, self.valnorm, self.advnorm,
+                    update=training,
+                    contdisc=self.config.contdisc,
+                    horizon=self.config.horizon,
+                    **self.config.imag_loss)
+
+                return {f'{k}{suffix}': v.mean(1).reshape((B, K)) for k, v in los.items()}, \
+                       {f'{k}{suffix}': v for k, v in mets.items()}
+
+            # Train default policy
+            los_main, mets_main = compute_policy_loss(self.pol, self.val, self.slowval, 'default')
+            losses.update(los_main)
+            metrics.update(mets_main)
+
+            # Train small policy (prefers low entropy states)
+            los_s, mets_s = compute_policy_loss(self.pol_small, self.val_small, self.slowval_small, 'small', '_small')
+            losses.update(los_s)
+            metrics.update(mets_s)
+
+            # Train large policy (prefers high entropy states)
+            los_l, mets_l = compute_policy_loss(self.pol_large, self.val_large, self.slowval_large, 'large', '_large')
+            losses.update(los_l)
+            metrics.update(mets_l)
+
+            # Skip repval_loss for adaptive policy mode (as in reference)
+            imgloss_out = {"ret": jnp.zeros((B * K, H))}  # Placeholder for compatibility
+
+            # Compute total loss with scale mapping for suffixed keys
+            total_loss = 0.0
+            for k, v in losses.items():
+                base_key = k.replace('_small', '').replace('_large', '')
+                if base_key in self.scales:
+                    scale = self.scales[base_key]
+                    total_loss += v.mean() * scale
+                metrics[f'loss/{k}'] = v.mean()
+            loss = total_loss
+
+        else:
+            # --- Default: Original single policy training ---
+            policyfn = lambda feat: sample(self.pol(self.feat2tensor(feat), 1))
+            _, imgfeat, imgprevact = self.dyn.imagine(starts, policyfn, H, training)
+            first = jax.tree.map(lambda x: x[:, -K:].reshape((B * K, 1, *x.shape[2:])), repfeat)
+            imgfeat = concat([sg(first, skip=self.config.ac_grads), sg(imgfeat)], 1)
+            lastact = policyfn(jax.tree.map(lambda x: x[:, -1], imgfeat))
+            lastact = jax.tree.map(lambda x: x[:, None], lastact)
+            imgact = concat([imgprevact, lastact], 1)
+            assert all(x.shape[:2] == (B * K, H + 1) for x in jax.tree.leaves(imgfeat))
+            assert all(x.shape[:2] == (B * K, H + 1) for x in jax.tree.leaves(imgact))
+            inp = self.feat2tensor(imgfeat)
+
+            # Extrinsic reward prediction
+            rew_ext = self.rew(inp, 2).pred()
+
+            # Apply intrinsic reward augmentation
+            rew_total, intr_mets = self.intrinsic(rew_ext, imgfeat, training)
+            metrics.update(intr_mets)
+
+            los, imgloss_out, mets = imag_loss(
+                imgact,
+                rew_total,
+                self.con(inp, 2).prob(1),
+                self.pol(inp, 2),
                 self.val(inp, 2),
                 self.slowval(inp, 2),
+                self.retnorm,
                 self.valnorm,
+                self.advnorm,
                 update=training,
+                contdisc=self.config.contdisc,
                 horizon=self.config.horizon,
-                **self.config.repl_loss,
+                **self.config.imag_loss,
             )
-            losses.update(los)
-            metrics.update(prefix(mets, "reploss"))
+            losses.update({k: v.mean(1).reshape((B, K)) for k, v in los.items()})
+            metrics.update(mets)
 
-        assert set(losses.keys()) == set(self.scales.keys()), (
-            sorted(losses.keys()),
-            sorted(self.scales.keys()),
-        )
-        metrics.update({f"loss/{k}": v.mean() for k, v in losses.items()})
-        loss = sum([v.mean() * self.scales[k] for k, v in losses.items()])
+            # Replay
+            if self.config.repval_loss:
+                feat = sg(repfeat, skip=self.config.repval_grad)
+                last, term, rew = [obs[k] for k in ("is_last", "is_terminal", "reward")]
+                boot = imgloss_out["ret"][:, 0].reshape(B, K)
+                feat, last, term, rew, boot = jax.tree.map(lambda x: x[:, -K:], (feat, last, term, rew, boot))
+                inp = self.feat2tensor(feat)
+                los, reploss_out, mets = repl_loss(
+                    last,
+                    term,
+                    rew,
+                    boot,
+                    self.val(inp, 2),
+                    self.slowval(inp, 2),
+                    self.valnorm,
+                    update=training,
+                    horizon=self.config.horizon,
+                    **self.config.repl_loss,
+                )
+                losses.update(los)
+                metrics.update(prefix(mets, "reploss"))
 
-        carry = (enc_carry, dyn_carry, dec_carry)
+            assert set(losses.keys()) == set(self.scales.keys()), (
+                sorted(losses.keys()),
+                sorted(self.scales.keys()),
+            )
+            metrics.update({f"loss/{k}": v.mean() for k, v in losses.items()})
+            loss = sum([v.mean() * self.scales[k] for k, v in losses.items()])
+
+        # Pack carry for return
+        if self.config.adaptive_policy.enable:
+            carry = (enc_carry, dyn_carry, dec_carry, ema_state)
+        else:
+            carry = (enc_carry, dyn_carry, dec_carry)
         entries = (enc_entries, dyn_entries, dec_entries)
         outs = {"tokens": tokens, "repfeat": repfeat, "losses": losses}
         if return_features:
@@ -353,7 +576,13 @@ class Agent(embodied.jax.Agent):
             return carry, {}
 
         carry, obs, prevact, _ = self._apply_replay_context(carry, data)
-        (enc_carry, dyn_carry, dec_carry) = carry
+
+        # Unpack carry based on adaptive_policy mode
+        if self.config.adaptive_policy.enable:
+            (enc_carry, dyn_carry, dec_carry, ema_state) = carry
+        else:
+            (enc_carry, dyn_carry, dec_carry) = carry
+
         B, T = obs["is_first"].shape
         RB = min(6, B)
         metrics = {}
@@ -474,12 +703,23 @@ class Agent(embodied.jax.Agent):
         return carry, metrics
 
     def _apply_replay_context(self, carry, data):
-        (enc_carry, dyn_carry, dec_carry, prevact) = carry
-        carry = (enc_carry, dyn_carry, dec_carry)
+        # Unpack carry based on adaptive_policy mode
+        if self.config.adaptive_policy.enable:
+            (enc_carry, dyn_carry, dec_carry, ema_state, prevact) = carry
+        else:
+            (enc_carry, dyn_carry, dec_carry, prevact) = carry
+
         stepid = data["stepid"]
         obs = {k: data[k] for k in self.obs_space}
         prepend = lambda x, y: jnp.concatenate([x[:, None], y[:, :-1]], 1)
         prevact = {k: prepend(prevact[k], data[k]) for k in self.act_space}
+
+        # Pack carry without prevact (and with ema_state if adaptive)
+        if self.config.adaptive_policy.enable:
+            carry = (enc_carry, dyn_carry, dec_carry, ema_state)
+        else:
+            carry = (enc_carry, dyn_carry, dec_carry)
+
         if not self.config.replay_context:
             return carry, obs, prevact, stepid
 
@@ -488,11 +728,20 @@ class Agent(embodied.jax.Agent):
         entries = [nested.get(k, {}) for k in ("enc", "dyn", "dec")]
         lhs = lambda xs: jax.tree.map(lambda x: x[:, :K], xs)
         rhs = lambda xs: jax.tree.map(lambda x: x[:, K:], xs)
-        rep_carry = (
-            self.enc.truncate(lhs(entries[0]), enc_carry),
-            self.dyn.truncate(lhs(entries[1]), dyn_carry),
-            self.dec.truncate(lhs(entries[2]), dec_carry),
-        )
+
+        if self.config.adaptive_policy.enable:
+            rep_carry = (
+                self.enc.truncate(lhs(entries[0]), enc_carry),
+                self.dyn.truncate(lhs(entries[1]), dyn_carry),
+                self.dec.truncate(lhs(entries[2]), dec_carry),
+                ema_state,  # Pass through ema_state
+            )
+        else:
+            rep_carry = (
+                self.enc.truncate(lhs(entries[0]), enc_carry),
+                self.dyn.truncate(lhs(entries[1]), dyn_carry),
+                self.dec.truncate(lhs(entries[2]), dec_carry),
+            )
         rep_obs = {k: rhs(data[k]) for k in self.obs_space}
         rep_prevact = {k: data[k][:, K - 1 : -1] for k in self.act_space}
         rep_stepid = rhs(stepid)
