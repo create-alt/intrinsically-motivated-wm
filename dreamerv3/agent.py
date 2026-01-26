@@ -220,6 +220,12 @@ class Agent(embodied.jax.Agent):
                 outs["replay"]["priority_explore"] = loss_term
                 outs["replay"]["priority_exploit"] = 1.0 / jnp.maximum(loss_term, eps)
 
+            elif priority_mode == "wm_loss":
+                # Mode 3: World model loss-based
+                model_loss = loss_outs["model_loss"]
+                outs["replay"]["priority_explore"] = model_loss
+                outs["replay"]["priority_exploit"] = 1.0 / jnp.maximum(model_loss, eps)
+
             else:
                 raise ValueError(f"Unknown priority_mode: {priority_mode}")
         carry = (*carry, {k: data[k][:, -1] for k in self.act_space})
