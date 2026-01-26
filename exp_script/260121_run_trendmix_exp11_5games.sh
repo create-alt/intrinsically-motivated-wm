@@ -34,7 +34,7 @@ if [ "$1" != "--running" ]; then
 fi
 
 # 以下はバックグラウンドで実行される部分
-cd /home/ist_baidoku/yoshinari.kawashima/wm25_final_homework/dreamerv3
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 # 環境変数を読み込む
 if [ -f .env ]; then
