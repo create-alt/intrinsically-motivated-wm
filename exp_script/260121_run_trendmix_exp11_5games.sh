@@ -2,31 +2,28 @@
 
 # セルフデタッチ: 引数なしで呼ばれたら、自分自身をnohupでバックグラウンド実行
 if [ "$1" != "--running" ]; then
-    MASTER_LOG="log/trendmix_exp08_5games_curious_$(date '+%y%m%d%H%M').log"
+    MASTER_LOG="log/trendmix_exp11_5games_$(date '+%y%m%d%H%M').log"
     mkdir -p log
     nohup "$0" --running > "$MASTER_LOG" 2>&1 &
     PID=$!
     echo "=========================================="
-    echo "TrendMixture exp08 (curious): 5 experiments started in background"
+    echo "TrendMixture exp11: 5 experiments started in background"
     echo "  PID: $PID"
     echo "  Master log: $MASTER_LOG"
     echo "=========================================="
     echo ""
     echo "Experiments:"
-    echo "  1. Bank Heist - trendmix_exp08_curious"
-    echo "  2. Frostbite - trendmix_exp08_curious"
-    echo "  3. Hero - trendmix_exp08_curious"
-    echo "  4. Seaquest - trendmix_exp08_curious"
-    echo "  5. Ms Pacman - trendmix_exp08_curious"
+    echo "  1. Bank Heist - trendmix_exp11"
+    echo "  2. Frostbite - trendmix_exp11"
+    echo "  3. Hero - trendmix_exp11"
+    echo "  4. Seaquest - trendmix_exp11"
+    echo "  5. Ms Pacman - trendmix_exp11"
     echo ""
-    echo "exp08 settings (curious replay priority):"
+    echo "exp11 settings:"
     echo "  - replay.trend.enable: True"
-    echo "  - replay.trend.priority_mode: curious"
-    echo "  - replay.trend.curious.c: 1e4"
-    echo "  - replay.trend.curious.beta: 0.7"
-    echo "  - replay.trend.fast: 0.01, slow: 0.001"
-    echo "  - replay.trend.k: 5.0"
-    echo "  - replay.fracs: explore=0.5, exploit=0.5"
+    echo "  - replay.trend.priority_mode: wm_loss"
+    echo "  - replay.trend.eps: 1e-2"
+    echo "  - replay.fracs: uniform=0.5, explore=0.25, exploit=0.25"
     echo ""
     echo "Useful commands:"
     echo "  Monitor:       tail -f $MASTER_LOG"
@@ -51,7 +48,7 @@ fi
 source .venv/bin/activate
 
 echo "=========================================="
-echo "Starting TrendMixture exp08 experiments (5 games, curious replay priority)"
+echo "Starting TrendMixture exp11 experiments (5 games)"
 echo "Started at: $(date)"
 echo "=========================================="
 
@@ -61,10 +58,10 @@ nvidia-smi
 echo ""
 
 ###############################################################################
-# 実験1: Bank Heist - trendmix_exp08_curious
+# 実験1: Bank Heist - trendmix_exp11
 ###############################################################################
 TASK="bank_heist"
-EXP_NAME="trendmix_exp08_curious"
+EXP_NAME="trendmix_exp11"
 TIME_STR=$(date '+%y%m%d%H%M')
 LOG_DIR="log/${TIME_STR}_dreamerV3_atari100k_${TASK}_${EXP_NAME}"
 mkdir -p ${LOG_DIR}
@@ -84,22 +81,20 @@ python dreamerv3/main.py \
     --agent.dormant.enable True \
     --agent.dormant.tau 0.025 \
     --replay.trend.enable True \
-    --replay.trend.priority_mode curious \
-    --replay.trend.curious.c 1e4 \
-    --replay.trend.curious.beta 0.7 \
     --replay.trend.fast 0.01 \
     --replay.trend.slow 0.001 \
     --replay.trend.k 5.0 \
-    --replay.trend.eps 1e-6 \
+    --replay.trend.priority_mode wm_loss \
+    --replay.trend.eps 1e-2 \
     --replay.trend.gate_min 0.05 \
     --replay.trend.gate_max 0.95 \
     --replay.trend.gate_init 0.5 \
-    --replay.fracs.uniform 0.0 \
+    --replay.fracs.uniform 0.5 \
     --replay.fracs.priority 0.0 \
     --replay.fracs.recency 0.0 \
     --replay.fracs.curious 0.0 \
-    --replay.fracs.explore 0.5 \
-    --replay.fracs.exploit 0.5 \
+    --replay.fracs.explore 0.25 \
+    --replay.fracs.exploit 0.25 \
     --jax.platform cuda \
     --logger.outputs jsonl,wandb \
     --logger.videos False \
@@ -109,10 +104,10 @@ echo "[Experiment 1] ${TASK} - ${EXP_NAME} Finished at: $(date)"
 echo ""
 
 ###############################################################################
-# 実験2: Frostbite - trendmix_exp08_curious
+# 実験2: Frostbite - trendmix_exp11
 ###############################################################################
 TASK="frostbite"
-EXP_NAME="trendmix_exp08_curious"
+EXP_NAME="trendmix_exp11"
 TIME_STR=$(date '+%y%m%d%H%M')
 LOG_DIR="log/${TIME_STR}_dreamerV3_atari100k_${TASK}_${EXP_NAME}"
 mkdir -p ${LOG_DIR}
@@ -132,22 +127,20 @@ python dreamerv3/main.py \
     --agent.dormant.enable True \
     --agent.dormant.tau 0.025 \
     --replay.trend.enable True \
-    --replay.trend.priority_mode curious \
-    --replay.trend.curious.c 1e4 \
-    --replay.trend.curious.beta 0.7 \
     --replay.trend.fast 0.01 \
     --replay.trend.slow 0.001 \
     --replay.trend.k 5.0 \
-    --replay.trend.eps 1e-6 \
+    --replay.trend.priority_mode wm_loss \
+    --replay.trend.eps 1e-2 \
     --replay.trend.gate_min 0.05 \
     --replay.trend.gate_max 0.95 \
     --replay.trend.gate_init 0.5 \
-    --replay.fracs.uniform 0.0 \
+    --replay.fracs.uniform 0.5 \
     --replay.fracs.priority 0.0 \
     --replay.fracs.recency 0.0 \
     --replay.fracs.curious 0.0 \
-    --replay.fracs.explore 0.5 \
-    --replay.fracs.exploit 0.5 \
+    --replay.fracs.explore 0.25 \
+    --replay.fracs.exploit 0.25 \
     --jax.platform cuda \
     --logger.outputs jsonl,wandb \
     --logger.videos False \
@@ -157,10 +150,10 @@ echo "[Experiment 2] ${TASK} - ${EXP_NAME} Finished at: $(date)"
 echo ""
 
 ###############################################################################
-# 実験3: Hero - trendmix_exp08_curious
+# 実験3: Hero - trendmix_exp11
 ###############################################################################
 TASK="hero"
-EXP_NAME="trendmix_exp08_curious"
+EXP_NAME="trendmix_exp11"
 TIME_STR=$(date '+%y%m%d%H%M')
 LOG_DIR="log/${TIME_STR}_dreamerV3_atari100k_${TASK}_${EXP_NAME}"
 mkdir -p ${LOG_DIR}
@@ -180,22 +173,20 @@ python dreamerv3/main.py \
     --agent.dormant.enable True \
     --agent.dormant.tau 0.025 \
     --replay.trend.enable True \
-    --replay.trend.priority_mode curious \
-    --replay.trend.curious.c 1e4 \
-    --replay.trend.curious.beta 0.7 \
     --replay.trend.fast 0.01 \
     --replay.trend.slow 0.001 \
     --replay.trend.k 5.0 \
-    --replay.trend.eps 1e-6 \
+    --replay.trend.priority_mode wm_loss \
+    --replay.trend.eps 1e-2 \
     --replay.trend.gate_min 0.05 \
     --replay.trend.gate_max 0.95 \
     --replay.trend.gate_init 0.5 \
-    --replay.fracs.uniform 0.0 \
+    --replay.fracs.uniform 0.5 \
     --replay.fracs.priority 0.0 \
     --replay.fracs.recency 0.0 \
     --replay.fracs.curious 0.0 \
-    --replay.fracs.explore 0.5 \
-    --replay.fracs.exploit 0.5 \
+    --replay.fracs.explore 0.25 \
+    --replay.fracs.exploit 0.25 \
     --jax.platform cuda \
     --logger.outputs jsonl,wandb \
     --logger.videos False \
@@ -205,10 +196,10 @@ echo "[Experiment 3] ${TASK} - ${EXP_NAME} Finished at: $(date)"
 echo ""
 
 ###############################################################################
-# 実験4: Seaquest - trendmix_exp08_curious
+# 実験4: Seaquest - trendmix_exp11
 ###############################################################################
 TASK="seaquest"
-EXP_NAME="trendmix_exp08_curious"
+EXP_NAME="trendmix_exp11"
 TIME_STR=$(date '+%y%m%d%H%M')
 LOG_DIR="log/${TIME_STR}_dreamerV3_atari100k_${TASK}_${EXP_NAME}"
 mkdir -p ${LOG_DIR}
@@ -228,22 +219,20 @@ python dreamerv3/main.py \
     --agent.dormant.enable True \
     --agent.dormant.tau 0.025 \
     --replay.trend.enable True \
-    --replay.trend.priority_mode curious \
-    --replay.trend.curious.c 1e4 \
-    --replay.trend.curious.beta 0.7 \
     --replay.trend.fast 0.01 \
     --replay.trend.slow 0.001 \
     --replay.trend.k 5.0 \
-    --replay.trend.eps 1e-6 \
+    --replay.trend.priority_mode wm_loss \
+    --replay.trend.eps 1e-2 \
     --replay.trend.gate_min 0.05 \
     --replay.trend.gate_max 0.95 \
     --replay.trend.gate_init 0.5 \
-    --replay.fracs.uniform 0.0 \
+    --replay.fracs.uniform 0.5 \
     --replay.fracs.priority 0.0 \
     --replay.fracs.recency 0.0 \
     --replay.fracs.curious 0.0 \
-    --replay.fracs.explore 0.5 \
-    --replay.fracs.exploit 0.5 \
+    --replay.fracs.explore 0.25 \
+    --replay.fracs.exploit 0.25 \
     --jax.platform cuda \
     --logger.outputs jsonl,wandb \
     --logger.videos False \
@@ -253,10 +242,10 @@ echo "[Experiment 4] ${TASK} - ${EXP_NAME} Finished at: $(date)"
 echo ""
 
 ###############################################################################
-# 実験5: Ms Pacman - trendmix_exp08_curious
+# 実験5: Ms Pacman - trendmix_exp11
 ###############################################################################
 TASK="ms_pacman"
-EXP_NAME="trendmix_exp08_curious"
+EXP_NAME="trendmix_exp11"
 TIME_STR=$(date '+%y%m%d%H%M')
 LOG_DIR="log/${TIME_STR}_dreamerV3_atari100k_${TASK}_${EXP_NAME}"
 mkdir -p ${LOG_DIR}
@@ -276,22 +265,20 @@ python dreamerv3/main.py \
     --agent.dormant.enable True \
     --agent.dormant.tau 0.025 \
     --replay.trend.enable True \
-    --replay.trend.priority_mode curious \
-    --replay.trend.curious.c 1e4 \
-    --replay.trend.curious.beta 0.7 \
     --replay.trend.fast 0.01 \
     --replay.trend.slow 0.001 \
     --replay.trend.k 5.0 \
-    --replay.trend.eps 1e-6 \
+    --replay.trend.priority_mode wm_loss \
+    --replay.trend.eps 1e-2 \
     --replay.trend.gate_min 0.05 \
     --replay.trend.gate_max 0.95 \
     --replay.trend.gate_init 0.5 \
-    --replay.fracs.uniform 0.0 \
+    --replay.fracs.uniform 0.5 \
     --replay.fracs.priority 0.0 \
     --replay.fracs.recency 0.0 \
     --replay.fracs.curious 0.0 \
-    --replay.fracs.explore 0.5 \
-    --replay.fracs.exploit 0.5 \
+    --replay.fracs.explore 0.25 \
+    --replay.fracs.exploit 0.25 \
     --jax.platform cuda \
     --logger.outputs jsonl,wandb \
     --logger.videos False \
@@ -302,5 +289,5 @@ echo ""
 
 ###############################################################################
 echo "=========================================="
-echo "All TrendMixture exp08 (curious) experiments completed at: $(date)"
+echo "All TrendMixture exp11 experiments completed at: $(date)"
 echo "=========================================="
