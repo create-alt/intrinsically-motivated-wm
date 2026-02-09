@@ -102,7 +102,7 @@ class Recency:
             p = prob
             for segment in path:
                 p = p[segment]
-            index = rng.choice(len(segment), p=p)
+            index = rng.choice(len(p), p=p)
             path.append(index)
         index = sum(index * bfactor ** (len(tree) - level - 1) for level, index in enumerate(path))
         return index
