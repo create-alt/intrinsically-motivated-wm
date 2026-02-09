@@ -136,6 +136,10 @@ defaults:
       typ: adaptive
       adaptive: {beta_max: 0.1, rho: 0.1, epsilon: 1e-6, clip_min: -10.0, clip_max: 10.0}
       lexa_style: {decay: 0.95, visual_scale: 1.0, clip_weights: True, stop_grad_weights: True}
+    ema_policy:
+      enable: False
+      decay: 0.95
+      visual_scale: 1.0
 
 size1m: &size1m
   .*\.rssm: {deter: 512, hidden: 64, classes: 4}
