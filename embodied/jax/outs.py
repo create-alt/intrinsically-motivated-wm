@@ -189,6 +189,51 @@ class Normal(Output):
         )
 
 
+class NormalCategory(Output):
+
+    def __init__(self, logits, stddev=1.0):
+        self.logits = f32(logits)
+        self.stddev = jnp.broadcast_to(f32(stddev), self.logits.shape)
+
+        # Convert logits to probabilities
+        probs = jax.nn.softmax(self.logits, axis=-1)
+
+        # Class indices [0, 1, 2, ..., K-1]
+        indices = jnp.arange(self.logits.shape[-1], dtype=jnp.float32)
+
+        # Compute mean (expected value)
+        self.mean = jnp.sum(probs * indices, axis=-1)
+        self.stddev = jnp.mean(self.stddev, axis=-1)
+
+    def pred(self):
+        return self.mean.astype(jnp.bfloat16)
+
+    def sample(self, seed, shape=()):
+        continuous_sample = jax.random.normal(seed, shape + self.mean.shape) * self.stddev + self.mean
+
+        index_float = jnp.round(continuous_sample)
+        index_clipped = jnp.clip(index_float, 0, self.logits.shape[-1] - 1).astype(jnp.int32)
+
+        return jax.nn.one_hot(index_clipped, self.logits.shape[-1])
+
+    def logp(self, event):
+        assert jnp.issubdtype(event.dtype, jnp.floating), event.dtype
+        return jax.scipy.stats.norm.logpdf(f32(event), self.mean, self.stddev)
+
+    def entropy(self):
+        return 0.5 * jnp.log(2 * jnp.pi * jnp.square(self.stddev)) + 0.5
+
+    def kl(self, other):
+        assert isinstance(other, type(self)), (self, other)
+        return 0.5 * (
+            jnp.square(self.stddev / other.stddev)
+            + jnp.square(other.mean - self.mean) / jnp.square(other.stddev)
+            + 2 * jnp.log(other.stddev)
+            - 2 * jnp.log(self.stddev)
+            - 1
+        )
+
+
 class Binary(Output):
 
     def __init__(self, logit):

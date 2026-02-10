@@ -566,7 +566,7 @@ class Agent(embodied.jax.Agent):
         model_loss = sum(losses[k] for k in wm_loss_keys if k in losses)
         outs["model_loss"] = model_loss  # Shape: (B, T)
         if self.config.replay.fracs.get('curious', 0) > 0 and self.config.replay.curious.entropy_lambda > 0:
-            stoch_ent = self.dyn._dist(repfeat["logit"]).entropy()
+            stoch_ent = self.dyn._dist(repfeat["logit"], repfeat.get("std")).entropy()
             outs["stoch_entropy"] = stoch_ent / self.dyn.stoch  # Shape: (B, T)
 
         return loss, (carry, entries, outs, metrics)
