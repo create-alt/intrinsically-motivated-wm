@@ -18,9 +18,9 @@ if [ "$1" != "--running" ]; then
     echo "Common settings:"
     echo "  - agent.dormant.enable: True"
     echo "  - agent.dormant.tau: 0.025"
-    echo "  - agent.ema_policy.enable: True"
-    echo "  - agent.ema_policy.decay: 0.95"
-    echo "  - agent.intrinsic.enable: False"
+    echo "  - agent.intrinsic.enable: True"
+    echo "  - agent.intrinsic.typ: lexa_style"
+    echo "  - agent.intrinsic.lexa_style.decay: 0.95"
     echo "  - logger.videos: False"
     echo ""
     echo "Useful commands:"
@@ -82,9 +82,11 @@ for SEED in 0 1 2 3 4; do
         --seed ${SEED} \
         --agent.dormant.enable True \
         --agent.dormant.tau 0.025 \
-        --agent.ema_policy.enable True \
-        --agent.ema_policy.decay 0.95 \
-        --agent.intrinsic.enable False \
+        --agent.intrinsic.enable True \
+        --agent.intrinsic.typ lexa_style \
+        --agent.intrinsic.lexa_style.decay 0.95 \
+        --agent.intrinsic.lexa_style.visual_scale 1.0 \
+        --agent.dec.simple.img_output normal \
         --jax.platform cuda \
         --logger.outputs jsonl,wandb \
         --logger.videos False \

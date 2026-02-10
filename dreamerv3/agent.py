@@ -498,12 +498,8 @@ class Agent(embodied.jax.Agent):
             rew_ext = self.rew(inp, 2).pred()
 
             # Apply reward augmentation
-            if self.config.ema_policy.enable:
-                rew_total, ema_mets = self._ema_policy_reward(rew_ext, imgfeat, training)
-                metrics.update(ema_mets)
-            else:
-                rew_total, intr_mets = self.intrinsic(rew_ext, imgfeat, training)
-                metrics.update(intr_mets)
+            rew_total, intr_mets = self.intrinsic(rew_ext, imgfeat, training)
+            metrics.update(intr_mets)
 
             los, imgloss_out, mets = imag_loss(
                 imgact,
@@ -758,60 +754,6 @@ class Agent(embodied.jax.Agent):
         )
         return carry, obs, prevact, stepid
 
-    def _ema_policy_reward(self, ext_rew, imgfeat, training):
-        """EMAトレンドに基づく外発的報酬とvisual curiosityのブレンド"""
-        metrics = {}
-        decay = self.config.ema_policy.decay
-
-        # 1. EMA と勾配を計算
-        rew_ema, rew_grad = calc_rew_trend(ext_rew, decay=decay)
-
-        # 2. 重み計算（勾配ベース）
-        weight_lower = jnp.clip(1 - rew_grad, 0.0, 1.0)  # 停滞/減少で発火
-        weight_upper = jnp.clip(rew_grad, 0.0, 1.0)        # 増加で発火
-        weight_lower = jax.lax.stop_gradient(weight_lower)
-        weight_upper = jax.lax.stop_gradient(weight_upper)
-
-        # 3. Visual curiosity
-        visual_bonus = self._calc_visual_curiosity(imgfeat)
-        visual_bonus = visual_bonus * self.config.ema_policy.visual_scale
-
-        # 4. ブレンド
-        total_rew = weight_upper * ext_rew + weight_lower * visual_bonus
-
-        # 5. メトリクス記録
-        metrics['ema_pol/rew_ema'] = rew_ema.mean()
-        metrics['ema_pol/rew_grad'] = rew_grad.mean()
-        metrics['ema_pol/weight_upper'] = weight_upper.mean()
-        metrics['ema_pol/weight_lower'] = weight_lower.mean()
-        metrics['ema_pol/visual_bonus'] = visual_bonus.mean()
-        metrics['ema_pol/visual_bonus_std'] = visual_bonus.std()
-        metrics['ema_pol/total_rew'] = total_rew.mean()
-
-        return total_rew, metrics
-
-    def _calc_visual_curiosity(self, feat):
-        """潜在特徴量から画像を予測し、その不確実性(標準偏差)を内発的報酬として計算する"""
-        B_K, T = feat['deter'].shape[:2]
-        init_carry = self.dec.initial(B_K)
-        reset = jnp.zeros((B_K, T), bool)
-
-        _, _, recons = self.dec(init_carry, feat, reset, training=True)
-
-        def compute_uncertainty(dist):
-            if hasattr(dist, 'output'):
-                dist = dist.output
-            if hasattr(dist, 'stddev'):
-                return dist.stddev.mean(axis=(-3, -2, -1))
-            # MSE出力の場合はフォールバック
-            return jnp.zeros(dist.pred().shape[:-3])
-
-        uncertainties = jax.tree.leaves(
-            jax.tree.map(compute_uncertainty, recons))
-        if not uncertainties:
-            return jnp.zeros((B_K, T), dtype=jnp.float32)
-        return jnp.mean(jnp.stack(uncertainties), axis=0)
-
     def _make_opt(
         self,
         lr: float = 4e-5,
@@ -967,39 +909,3 @@ def lambda_return(last, term, rew, val, boot, disc, lam):
     for t in reversed(range(live.shape[1])):
         rets.append(interm[:, t] + live[:, t] * cont[:, t] * rets[-1])
     return jnp.stack(list(reversed(rets))[:-1], 1)
-
-
-def calc_rew_trend(rewards, decay=0.95):
-    """
-    報酬の移動平均とその勾配(変化量)を計算する。
-    Args:
-        rewards: (Batch, Time) または (Batch, Time, 1) の形状
-        decay: 指数移動平均の減衰率
-    Returns:
-        ema: 移動平均 (入力と同じ形状)
-        grad: 勾配/変化量 (入力と同じ形状)
-    """
-    is_vector = rewards.ndim == 2
-    if is_vector:
-        rewards = rewards[..., None]
-
-    xs = jnp.swapaxes(rewards, 0, 1)
-
-    def ema_step(carry, x):
-        prev_ema = carry
-        new_ema = decay * prev_ema + (1.0 - decay) * x
-        return new_ema, new_ema
-
-    init = xs[0]
-    _, ema_seq = jax.lax.scan(ema_step, init, xs)
-
-    ema = jnp.swapaxes(ema_seq, 0, 1)
-
-    prev_ema = jnp.concatenate([ema[:, :1], ema[:, :-1]], axis=1)
-    grad = ema - prev_ema
-
-    if is_vector:
-        ema = ema.squeeze(-1)
-        grad = grad.squeeze(-1)
-
-    return ema, grad
