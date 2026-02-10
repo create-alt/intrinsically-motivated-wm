@@ -15,6 +15,7 @@ sg = jax.lax.stop_gradient
 
 class RSSM(nj.Module):
 
+    dist: str = "onehot"
     deter: int = 4096
     hidden: int = 2048
     stoch: int = 32
@@ -85,14 +86,23 @@ class RSSM(nj.Module):
         action = nn.mask(action, ~reset)
         deter = self._core(deter, stoch, action)
         tokens = tokens.reshape((*deter.shape[:-1], -1))
+        tokens = jnp.nan_to_num(tokens, nan=0.0, posinf=1e4, neginf=-1e4)
         x = tokens if self.absolute else jnp.concatenate([deter, tokens], -1)
         for i in range(self.obslayers):
             x = self.sub(f"obs{i}", nn.Linear, self.hidden, **self.kw)(x)
             x = nn.act(self.act)(self.sub(f"obs{i}norm", nn.Norm, self.norm)(x))
         logit = self._logit("obslogit", x)
-        stoch = nn.cast(self._dist(logit).sample(seed=nj.seed()))
+        if self.dist == "normal_category":
+            logit = jnp.nan_to_num(logit, nan=0.0, posinf=60.0, neginf=-60.0)
+            std = self._std("obsstd", x)
+            std = jnp.nan_to_num(std, nan=0.0, posinf=20.0, neginf=-20.0)
+        else:
+            std = None
+        stoch = nn.cast(self._dist(logit, std).sample(seed=nj.seed()))
         carry = dict(deter=deter, stoch=stoch)
         feat = dict(deter=deter, stoch=stoch, logit=logit)
+        if std is not None:
+            feat["std"] = std
         entry = dict(deter=deter, stoch=stoch)
         assert all(x.dtype == nn.COMPUTE_DTYPE for x in (deter, stoch, logit))
         return carry, (entry, feat)
@@ -102,10 +112,12 @@ class RSSM(nj.Module):
             action = policy(sg(carry)) if callable(policy) else policy
             actemb = nn.DictConcat(self.act_space, 1)(action)
             deter = self._core(carry["deter"], carry["stoch"], actemb)
-            logit = self._prior(deter)
-            stoch = nn.cast(self._dist(logit).sample(seed=nj.seed()))
+            logit, std = self._prior(deter)
+            stoch = nn.cast(self._dist(logit, std).sample(seed=nj.seed()))
             carry = nn.cast(dict(deter=deter, stoch=stoch))
             feat = nn.cast(dict(deter=deter, stoch=stoch, logit=logit))
+            if std is not None:
+                feat['std'] = std
             assert all(x.dtype == nn.COMPUTE_DTYPE for x in (deter, stoch, logit))
             return carry, (feat, action)
         else:
@@ -136,16 +148,20 @@ class RSSM(nj.Module):
     def loss(self, carry, tokens, acts, reset, training):
         metrics = {}
         carry, entries, feat = self.observe(carry, tokens, acts, reset, training)
-        prior = self._prior(feat["deter"])
-        post = feat["logit"]
-        dyn = self._dist(sg(post)).kl(self._dist(prior))
-        rep = self._dist(post).kl(self._dist(sg(prior)))
+        prior_logit, prior_std = self._prior(feat["deter"])
+        post_logit = feat["logit"]
+        post_std = feat.get("std")
+        dyn = self._dist(sg(post_logit), sg(post_std) if post_std is not None else None).kl(self._dist(prior_logit, prior_std))
+        rep = self._dist(post_logit, post_std).kl(self._dist(sg(prior_logit), sg(prior_std) if prior_std is not None else None))
         if self.free_nats:
             dyn = jnp.maximum(dyn, self.free_nats)
             rep = jnp.maximum(rep, self.free_nats)
         losses = {"dyn": dyn, "rep": rep}
-        metrics["dyn_ent"] = self._dist(prior).entropy().mean()
-        metrics["rep_ent"] = self._dist(post).entropy().mean()
+        metrics["dyn_ent"] = self._dist(prior_logit, prior_std).entropy().mean()
+        metrics["rep_ent"] = self._dist(post_logit, post_std).entropy().mean()
+        if self.dist == 'normal_category':
+            metrics["prior_std"] = prior_std.mean()
+            metrics["post_std"] = post_std.mean()
         return carry, entries, losses, feat, metrics
 
     def _core(self, deter, stoch, action):
@@ -172,22 +188,37 @@ class RSSM(nj.Module):
         cand = jnp.tanh(reset * cand)
         update = jax.nn.sigmoid(update - 1)
         deter = update * cand + (1 - update) * deter
-        return deter
+        return jnp.nan_to_num(deter, nan=0.0, posinf=1e4, neginf=-1e4)
 
     def _prior(self, feat):
         x = feat
         for i in range(self.imglayers):
             x = self.sub(f"prior{i}", nn.Linear, self.hidden, **self.kw)(x)
             x = nn.act(self.act)(self.sub(f"prior{i}norm", nn.Norm, self.norm)(x))
-        return self._logit("priorlogit", x)
+        logit = self._logit("priorlogit", x)
+        if self.dist == "normal_category":
+            logit = jnp.nan_to_num(logit, nan=0.0, posinf=60.0, neginf=-60.0)
+            std = self._std("priorstd", x)
+            std = jnp.nan_to_num(std, nan=0.0, posinf=20.0, neginf=-20.0)
+        else:
+            std = None
+        return logit, std
 
     def _logit(self, name, x):
         kw = dict(**self.kw, outscale=self.outscale)
         x = self.sub(name, nn.Linear, self.stoch * self.classes, **kw)(x)
         return x.reshape(x.shape[:-1] + (self.stoch, self.classes))
 
-    def _dist(self, logits):
-        out = embodied.jax.outs.OneHot(logits, self.unimix)
+    def _std(self, name, x):
+        kw = dict(**self.kw, outscale=self.outscale)
+        x = self.sub(name, nn.Linear, self.stoch * self.classes, **kw)(x)
+        return x.reshape(x.shape[:-1] + (self.stoch, self.classes))
+
+    def _dist(self, logits, std=None):
+        if self.dist == 'normal_category':
+            out = embodied.jax.outs.NormalCategory(logits, std)
+        else:
+            out = embodied.jax.outs.OneHot(logits, self.unimix)
         out = embodied.jax.outs.Agg(out, 1, jnp.sum)
         return out
 
@@ -262,6 +293,7 @@ class Encoder(nj.Module):
 
         x = jnp.concatenate(outs, -1)
         tokens = x.reshape((*bshape, *x.shape[1:]))
+        tokens = jnp.nan_to_num(tokens, nan=0.0, posinf=1e4, neginf=-1e4)
         entries = {}
         return carry, entries, tokens
 
