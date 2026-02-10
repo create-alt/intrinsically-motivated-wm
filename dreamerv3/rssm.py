@@ -86,17 +86,23 @@ class RSSM(nj.Module):
         action = nn.mask(action, ~reset)
         deter = self._core(deter, stoch, action)
         tokens = tokens.reshape((*deter.shape[:-1], -1))
+        tokens = jnp.nan_to_num(tokens, nan=0.0, posinf=1e4, neginf=-1e4)
         x = tokens if self.absolute else jnp.concatenate([deter, tokens], -1)
         for i in range(self.obslayers):
             x = self.sub(f"obs{i}", nn.Linear, self.hidden, **self.kw)(x)
             x = nn.act(self.act)(self.sub(f"obs{i}norm", nn.Norm, self.norm)(x))
         logit = self._logit("obslogit", x)
-        std = self._std("obsstd", x) if self.dist == 'normal_category' else None
+        if self.dist == "normal_category":
+            logit = jnp.nan_to_num(logit, nan=0.0, posinf=60.0, neginf=-60.0)
+            std = self._std("obsstd", x)
+            std = jnp.nan_to_num(std, nan=0.0, posinf=20.0, neginf=-20.0)
+        else:
+            std = None
         stoch = nn.cast(self._dist(logit, std).sample(seed=nj.seed()))
         carry = dict(deter=deter, stoch=stoch)
         feat = dict(deter=deter, stoch=stoch, logit=logit)
         if std is not None:
-            feat['std'] = std
+            feat["std"] = std
         entry = dict(deter=deter, stoch=stoch)
         assert all(x.dtype == nn.COMPUTE_DTYPE for x in (deter, stoch, logit))
         return carry, (entry, feat)
@@ -182,7 +188,7 @@ class RSSM(nj.Module):
         cand = jnp.tanh(reset * cand)
         update = jax.nn.sigmoid(update - 1)
         deter = update * cand + (1 - update) * deter
-        return deter
+        return jnp.nan_to_num(deter, nan=0.0, posinf=1e4, neginf=-1e4)
 
     def _prior(self, feat):
         x = feat
@@ -190,7 +196,12 @@ class RSSM(nj.Module):
             x = self.sub(f"prior{i}", nn.Linear, self.hidden, **self.kw)(x)
             x = nn.act(self.act)(self.sub(f"prior{i}norm", nn.Norm, self.norm)(x))
         logit = self._logit("priorlogit", x)
-        std = self._std("priorstd", x) if self.dist == 'normal_category' else None
+        if self.dist == "normal_category":
+            logit = jnp.nan_to_num(logit, nan=0.0, posinf=60.0, neginf=-60.0)
+            std = self._std("priorstd", x)
+            std = jnp.nan_to_num(std, nan=0.0, posinf=20.0, neginf=-20.0)
+        else:
+            std = None
         return logit, std
 
     def _logit(self, name, x):
@@ -282,6 +293,7 @@ class Encoder(nj.Module):
 
         x = jnp.concatenate(outs, -1)
         tokens = x.reshape((*bshape, *x.shape[1:]))
+        tokens = jnp.nan_to_num(tokens, nan=0.0, posinf=1e4, neginf=-1e4)
         entries = {}
         return carry, entries, tokens
 

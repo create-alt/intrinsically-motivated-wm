@@ -191,9 +191,23 @@ class Normal(Output):
 
 class NormalCategory(Output):
 
+    _LOGIT_CLIP = 60.0
+    _STD_MIN = 1e-4
+    _STD_MAX = 1e2
+
     def __init__(self, logits, stddev=1.0):
-        self.logits = f32(logits)
-        self.stddev = jnp.broadcast_to(f32(stddev), self.logits.shape)
+        safe_logits = jnp.nan_to_num(
+            f32(logits),
+            nan=0.0,
+            posinf=self._LOGIT_CLIP,
+            neginf=-self._LOGIT_CLIP,
+        )
+        self.logits = jnp.clip(safe_logits, -self._LOGIT_CLIP, self._LOGIT_CLIP)
+
+        raw_stddev = jnp.broadcast_to(f32(stddev), self.logits.shape)
+        raw_stddev = jnp.nan_to_num(raw_stddev, nan=0.0, posinf=0.0, neginf=0.0)
+        safe_stddev = jax.nn.softplus(raw_stddev) + self._STD_MIN
+        safe_stddev = jnp.clip(safe_stddev, self._STD_MIN, self._STD_MAX)
 
         # Convert logits to probabilities
         probs = jax.nn.softmax(self.logits, axis=-1)
@@ -203,18 +217,19 @@ class NormalCategory(Output):
 
         # Compute mean (expected value)
         self.mean = jnp.sum(probs * indices, axis=-1)
-        self.stddev = jnp.mean(self.stddev, axis=-1)
+        self.stddev = jnp.mean(safe_stddev, axis=-1)
 
     def pred(self):
         return self.mean.astype(jnp.bfloat16)
 
     def sample(self, seed, shape=()):
-        continuous_sample = jax.random.normal(seed, shape + self.mean.shape) * self.stddev + self.mean
+        noise = jax.random.normal(seed, shape + self.mean.shape, f32)
+        continuous_sample = noise * self.stddev + self.mean
 
         index_float = jnp.round(continuous_sample)
         index_clipped = jnp.clip(index_float, 0, self.logits.shape[-1] - 1).astype(jnp.int32)
 
-        return jax.nn.one_hot(index_clipped, self.logits.shape[-1])
+        return jax.nn.one_hot(index_clipped, self.logits.shape[-1], dtype=f32)
 
     def logp(self, event):
         assert jnp.issubdtype(event.dtype, jnp.floating), event.dtype
