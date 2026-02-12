@@ -22,6 +22,38 @@ concat = lambda xs, a: jax.tree.map(lambda *x: jnp.concatenate(x, a), *xs)
 isimage = lambda s: s.dtype == np.uint8 and len(s.shape) == 3
 
 
+class SharedMLPHead(nj.Module):
+
+    def __init__(self, space, dists, names, **kw):
+        self.names = names
+        valid_mlp_keys = {
+            'layers', 'units', 'act', 'norm', 'bias',
+            'winit', 'binit'
+        }
+        mlp_kw = {k: v for k, v in kw.items() if k in valid_mlp_keys}
+        self.shape = kw.get('units', 1024)
+        self.backbone_mlp = nn.MLP(**mlp_kw, name='backbone_mlp')
+
+        head_kw = kw.copy()
+        head_kw['layers'] = 0
+        output_arg = dists
+        if 'output' in head_kw:
+            config_output = head_kw.pop('output')
+            if not output_arg:
+                output_arg = config_output
+        self.heads = {
+            n: embodied.jax.MLPHead(space, output_arg, **head_kw, name=n)
+            for n in names
+        }
+
+    def __call__(self, x, bdims, name=None):
+        feat = self.backbone_mlp(x)
+        all_outs = {n: h(feat, bdims) for n, h in self.heads.items()}
+        if name:
+            return all_outs[name]
+        return all_outs
+
+
 class Agent(embodied.jax.Agent):
 
     banner = [
@@ -59,7 +91,7 @@ class Agent(embodied.jax.Agent):
         self.feat2tensor = lambda x: jnp.concatenate(
             [
                 nn.cast(x["deter"]),
-                nn.cast(x["stoch"].reshape((*x["stoch"].shape[:-2], -1))),
+                nn.cast(x["stoch"]).reshape((*x["deter"].shape[:-1], -1)),
             ],
             -1,
         )
@@ -88,19 +120,19 @@ class Agent(embodied.jax.Agent):
 
         # --- AdaptivePolicy Exploration Networks ---
         if config.adaptive_policy.enable:
-            self.pol_small = embodied.jax.MLPHead(act_space, outs, **config.policy, name='pol_small')
-            self.val_small = embodied.jax.MLPHead(scalar, **config.value, name='val_small')
-            self.slowval_small = embodied.jax.SlowModel(
-                embodied.jax.MLPHead(scalar, **config.value, name='slowval_small'),
-                source=self.val_small, **config.slowvalue)
+            dist = config.dyn.rssm.get('dist', 'onehot')
+            if dist != 'normal':
+                raise ValueError(
+                    f"adaptive_policy.enable=True requires dyn.rssm.dist='normal', "
+                    f"got '{dist}'. The std-based exploration reward assumes normal distribution."
+                )
+            # SharedMLPHead: shared backbone + 3 heads for pol/val/slowval
+            self.pol = SharedMLPHead(act_space, outs, ['main', 'small', 'large'], **config.policy, name='pol_shared')
+            self.val = SharedMLPHead(scalar, {}, ['main', 'small', 'large'], **config.value, name='val_shared')
+            self.slowval = embodied.jax.SlowModel(
+                SharedMLPHead(scalar, {}, ['main', 'small', 'large'], **config.value, name='slowval_shared'),
+                source=self.val, **config.slowvalue)
 
-            self.pol_large = embodied.jax.MLPHead(act_space, outs, **config.policy, name='pol_large')
-            self.val_large = embodied.jax.MLPHead(scalar, **config.value, name='val_large')
-            self.slowval_large = embodied.jax.SlowModel(
-                embodied.jax.MLPHead(scalar, **config.value, name='slowval_large'),
-                source=self.val_large, **config.slowvalue)
-
-            # AdaptivePolicy parameters
             self.span_short = config.adaptive_policy.ema_span_short
             self.span_long = config.adaptive_policy.ema_span_long
             self.alpha_small = config.adaptive_policy.target_std_small
@@ -117,8 +149,6 @@ class Agent(embodied.jax.Agent):
             self.pol,
             self.val,
         ]
-        if config.adaptive_policy.enable:
-            self.modules.extend([self.pol_small, self.val_small, self.pol_large, self.val_large])
         self.opt = embodied.jax.Optimizer(self.modules, self._make_opt(**config.opt), summary_depth=1, name="opt")
 
         scales = self.config.loss_scales.copy()
@@ -129,7 +159,7 @@ class Agent(embodied.jax.Agent):
     @property
     def policy_keys(self):
         if self.config.adaptive_policy.enable:
-            return "^(enc|dyn|dec|pol|pol_small|pol_large)/"
+            return "^(enc|dyn|dec|pol_shared)/"
         return "^(enc|dyn|dec|pol)/"
 
     @property
@@ -157,13 +187,44 @@ class Agent(embodied.jax.Agent):
             self.dec.initial(batch_size),
         )
         if self.config.adaptive_policy.enable:
+            # Dummy input to initialize all SharedMLPHead parameters
+            if self.config.dyn.rssm.get('dist', 'onehot') == 'normal':
+                feat_dim = self.dyn.deter + self.dyn.stoch
+            else:
+                feat_dim = self.dyn.deter + self.dyn.stoch * self.dyn.classes
+            dummy_x = jnp.zeros((batch_size, feat_dim), jnp.bfloat16)
+            p_out = self.pol(dummy_x, bdims=1)
+            v_out = self.val(dummy_x, bdims=1)
+            s_out = self.slowval(dummy_x, bdims=1)
+
+            def get_tensor(x):
+                while hasattr(x, 'output'):
+                    x = x.output
+                if hasattr(x, 'dist'):
+                    x = x.dist
+                if hasattr(x, 'logits'): return x.logits
+                if hasattr(x, 'logit'): return x.logit
+                if hasattr(x, 'mean'): return x.mean
+                if hasattr(x, 'mode'): return x.mode()
+                if hasattr(x, 'pred'): return x.pred()
+                return x
+
+            outs = [p_out, v_out, s_out]
+            leaves = jax.tree.leaves(jax.tree.map(get_tensor, outs))
+            valid_leaves = [x for x in leaves if hasattr(x, 'dtype')]
+            if valid_leaves:
+                dummy_sum = sum([jnp.sum(x).astype(f32) for x in valid_leaves])
+                dummy_dependency = dummy_sum * 0.0
+            else:
+                dummy_dependency = jnp.array(0.0, dtype=f32)
+
             # EMA State: (mean_short, mean_long, diff_short, diff_long, count)
             ema_state = (
-                jnp.zeros((batch_size,), jnp.float32),  # mean_short
-                jnp.zeros((batch_size,), jnp.float32),  # mean_long
-                jnp.zeros((batch_size,), jnp.float32),  # diff_short
-                jnp.zeros((batch_size,), jnp.float32),  # diff_long
-                jnp.zeros((batch_size,), jnp.int32),    # count
+                jnp.zeros((batch_size,), f32) + dummy_dependency,
+                jnp.zeros((batch_size,), f32),
+                jnp.zeros((batch_size,), f32),
+                jnp.zeros((batch_size,), f32),
+                jnp.zeros((batch_size,), i32),
             )
             return (*base, ema_state, jax.tree.map(zeros, self.act_space))
         return (*base, jax.tree.map(zeros, self.act_space))
@@ -216,15 +277,11 @@ class Agent(embodied.jax.Agent):
 
         inp = self.feat2tensor(feat)
 
-        # 1. Generate Action Candidates from all 3 policies
-        pol_def = self.pol(inp, bdims=1)
-        act_def = sample(pol_def)
-
-        pol_s = self.pol_small(inp, bdims=1)
-        act_s = sample(pol_s)
-
-        pol_l = self.pol_large(inp, bdims=1)
-        act_l = sample(pol_l)
+        # 1. Generate Action Candidates from all 3 policies via SharedMLPHead
+        pols = self.pol(inp, bdims=1)
+        act_def = sample(pols['main'])
+        act_s = sample(pols['small'])
+        act_l = sample(pols['large'])
 
         # 2. Update EMA State
         mean_s, mean_l, diff_s, diff_l, count = ema_state
@@ -293,9 +350,6 @@ class Agent(embodied.jax.Agent):
         metrics, (carry, entries, loss_outs, mets) = self.opt(self.loss, carry, obs, prevact, training=True, has_aux=True)
         metrics.update(mets)
         self.slowval.update()
-        if self.config.adaptive_policy.enable:
-            self.slowval_small.update()
-            self.slowval_large.update()
         outs = {}
         if self.config.replay_context:
             updates = elements.tree.flatdict(dict(stepid=stepid, enc=entries[0], dyn=entries[1], dec=entries[2]))
@@ -402,9 +456,9 @@ class Agent(embodied.jax.Agent):
         starts = sg(starts)
 
         if self.config.adaptive_policy.enable:
-            # --- AdaptivePolicy: Train all 3 policies ---
-            def compute_policy_loss(policy_net, value_net, slowval_net, reward_fn_type='default', suffix=''):
-                policyfn = lambda feat: sample(policy_net(self.feat2tensor(feat), 1))
+            # --- AdaptivePolicy: Train all 3 policies via SharedMLPHead ---
+            def compute_policy_loss(policy_net, value_net, slowval_net, head_name, reward_fn_type='default', suffix=''):
+                policyfn = lambda feat: sample(policy_net(self.feat2tensor(feat), 1, name=head_name))
 
                 _, imgfeat, imgprevact = self.dyn.imagine(starts, policyfn, H, training)
 
@@ -424,13 +478,11 @@ class Agent(embodied.jax.Agent):
                     rew_ext = self.rew(inp_img, 2).pred()
                     reward, intr_mets = self.intrinsic(rew_ext, imgfeat, training)
                 else:
-                    # Use entropy-based shaping reward for exploration policies
+                    # Use std-based shaping reward for exploration policies
                     logits = imgfeat['logit']
-                    # Compute std from stochastic distribution
-                    # logits shape: (B*K, H+1, stoch, classes)
-                    probs = jax.nn.softmax(logits, axis=-1)
-                    entropy = -jnp.sum(probs * jnp.log(probs + 1e-8), axis=-1)  # per stoch dim
-                    std_agg = jnp.mean(entropy, axis=-1)  # average over stoch dims
+                    _, std_raw = jnp.split(logits, 2, -1)
+                    std = jax.nn.softplus(std_raw) + 0.1
+                    std_agg = jnp.mean(std, -1)
 
                     target_alpha = self.alpha_small if reward_fn_type == 'small' else self.alpha_large
                     eps = 1e-4
@@ -441,9 +493,9 @@ class Agent(embodied.jax.Agent):
                     imgact,
                     reward,
                     self.con(inp_img, 2).prob(1),
-                    policy_net(inp_img, 2),
-                    value_net(inp_img, 2),
-                    slowval_net(inp_img, 2),
+                    policy_net(inp_img, 2, name=head_name),
+                    value_net(inp_img, 2, name=head_name),
+                    slowval_net(inp_img, 2, name=head_name),
                     self.retnorm, self.valnorm, self.advnorm,
                     update=training,
                     contdisc=self.config.contdisc,
@@ -453,23 +505,21 @@ class Agent(embodied.jax.Agent):
                 return {f'{k}{suffix}': v.mean(1).reshape((B, K)) for k, v in los.items()}, \
                        {f'{k}{suffix}': v for k, v in mets.items()}
 
-            # Train default policy
-            los_main, mets_main = compute_policy_loss(self.pol, self.val, self.slowval, 'default')
+            # Train all 3 policies (all sharing self.pol/self.val/self.slowval backbone)
+            los_main, mets_main = compute_policy_loss(self.pol, self.val, self.slowval, 'main', 'default')
             losses.update(los_main)
             metrics.update(mets_main)
 
-            # Train small policy (prefers low entropy states)
-            los_s, mets_s = compute_policy_loss(self.pol_small, self.val_small, self.slowval_small, 'small', '_small')
+            los_s, mets_s = compute_policy_loss(self.pol, self.val, self.slowval, 'small', 'small', '_small')
             losses.update(los_s)
             metrics.update(mets_s)
 
-            # Train large policy (prefers high entropy states)
-            los_l, mets_l = compute_policy_loss(self.pol_large, self.val_large, self.slowval_large, 'large', '_large')
+            los_l, mets_l = compute_policy_loss(self.pol, self.val, self.slowval, 'large', 'large', '_large')
             losses.update(los_l)
             metrics.update(mets_l)
 
-            # Skip repval_loss for adaptive policy mode (as in reference)
-            imgloss_out = {"ret": jnp.zeros((B * K, H))}  # Placeholder for compatibility
+            # Skip repval_loss for adaptive policy mode
+            imgloss_out = {"ret": jnp.zeros((B * K, H))}
 
             # Compute total loss with scale mapping for suffixed keys
             total_loss = 0.0
@@ -638,12 +688,13 @@ class Agent(embodied.jax.Agent):
             for idx, layer in enumerate(con_layers):
                 add_metric(f"world_con_layer{idx}", layer, world_means, penultimate=True)
 
-            _, pol_layers = self.pol(inp, 2, return_layers=True)
-            for idx, layer in enumerate(pol_layers):
-                add_metric(f"actor_layer{idx}", layer, actor_means)
-            _, val_layers = self.val(inp, 2, return_layers=True)
-            for idx, layer in enumerate(val_layers):
-                add_metric(f"critic_layer{idx}", layer, critic_means)
+            if not self.config.adaptive_policy.enable:
+                _, pol_layers = self.pol(inp, 2, return_layers=True)
+                for idx, layer in enumerate(pol_layers):
+                    add_metric(f"actor_layer{idx}", layer, actor_means)
+                _, val_layers = self.val(inp, 2, return_layers=True)
+                for idx, layer in enumerate(val_layers):
+                    add_metric(f"critic_layer{idx}", layer, critic_means)
 
             world_all = dormant.aggregate_metrics(world_means, tau)
             if world_all is not None:

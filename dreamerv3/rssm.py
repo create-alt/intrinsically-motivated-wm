@@ -39,16 +39,24 @@ class RSSM(nj.Module):
 
     @property
     def entry_space(self):
+        if self.dist == 'normal':
+            stoch_shape = (self.stoch,)
+        else:
+            stoch_shape = (self.stoch, self.classes)
         return dict(
             deter=elements.Space(np.float32, self.deter),
-            stoch=elements.Space(np.float32, (self.stoch, self.classes)),
+            stoch=elements.Space(np.float32, stoch_shape),
         )
 
     def initial(self, bsize):
+        if self.dist == 'normal':
+            stoch_shape = [bsize, self.stoch]
+        else:
+            stoch_shape = [bsize, self.stoch, self.classes]
         carry = nn.cast(
             dict(
                 deter=jnp.zeros([bsize, self.deter], f32),
-                stoch=jnp.zeros([bsize, self.stoch, self.classes], f32),
+                stoch=jnp.zeros(stoch_shape, f32),
             )
         )
         return carry
@@ -96,6 +104,9 @@ class RSSM(nj.Module):
             logit = jnp.nan_to_num(logit, nan=0.0, posinf=60.0, neginf=-60.0)
             std = self._std("obsstd", x)
             std = jnp.nan_to_num(std, nan=0.0, posinf=20.0, neginf=-20.0)
+        elif self.dist == "normal":
+            logit = jnp.nan_to_num(logit, nan=0.0, posinf=60.0, neginf=-60.0)
+            std = None
         else:
             std = None
         stoch = nn.cast(self._dist(logit, std).sample(seed=nj.seed()))
@@ -162,6 +173,11 @@ class RSSM(nj.Module):
         if self.dist == 'normal_category':
             metrics["prior_std"] = prior_std.mean()
             metrics["post_std"] = post_std.mean()
+        elif self.dist == 'normal':
+            _, prior_std_raw = jnp.split(prior_logit, 2, -1)
+            _, post_std_raw = jnp.split(post_logit, 2, -1)
+            metrics["prior_std"] = (jax.nn.softplus(prior_std_raw) + 0.1).mean()
+            metrics["post_std"] = (jax.nn.softplus(post_std_raw) + 0.1).mean()
         return carry, entries, losses, feat, metrics
 
     def _core(self, deter, stoch, action):
@@ -200,14 +216,21 @@ class RSSM(nj.Module):
             logit = jnp.nan_to_num(logit, nan=0.0, posinf=60.0, neginf=-60.0)
             std = self._std("priorstd", x)
             std = jnp.nan_to_num(std, nan=0.0, posinf=20.0, neginf=-20.0)
+        elif self.dist == "normal":
+            logit = jnp.nan_to_num(logit, nan=0.0, posinf=60.0, neginf=-60.0)
+            std = None
         else:
             std = None
         return logit, std
 
     def _logit(self, name, x):
         kw = dict(**self.kw, outscale=self.outscale)
-        x = self.sub(name, nn.Linear, self.stoch * self.classes, **kw)(x)
-        return x.reshape(x.shape[:-1] + (self.stoch, self.classes))
+        if self.dist == 'normal':
+            x = self.sub(name, nn.Linear, self.stoch * 2, **kw)(x)
+            return x  # shape: (..., stoch*2)
+        else:
+            x = self.sub(name, nn.Linear, self.stoch * self.classes, **kw)(x)
+            return x.reshape(x.shape[:-1] + (self.stoch, self.classes))
 
     def _std(self, name, x):
         kw = dict(**self.kw, outscale=self.outscale)
@@ -215,7 +238,11 @@ class RSSM(nj.Module):
         return x.reshape(x.shape[:-1] + (self.stoch, self.classes))
 
     def _dist(self, logits, std=None):
-        if self.dist == 'normal_category':
+        if self.dist == 'normal':
+            mean, std_raw = jnp.split(logits, 2, -1)
+            std = jax.nn.softplus(std_raw) + 0.1
+            out = embodied.jax.outs.Normal(mean, std)
+        elif self.dist == 'normal_category':
             out = embodied.jax.outs.NormalCategory(logits, std)
         else:
             out = embodied.jax.outs.OneHot(logits, self.unimix)
@@ -367,7 +394,7 @@ class Decoder(nj.Module):
             if self.bspace:
                 u, g = math.prod(shape), self.bspace
                 x0, x1 = nn.cast((feat["deter"], feat["stoch"]))
-                x1 = x1.reshape((*x1.shape[:-2], -1))
+                x1 = x1.reshape((*bshape, -1))
                 x0 = x0.reshape((-1, x0.shape[-1]))
                 x1 = x1.reshape((-1, x1.shape[-1]))
                 x0 = self.sub("sp0", nn.BlockLinear, u, g, **self.kw)(x0)
