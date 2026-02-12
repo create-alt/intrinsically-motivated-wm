@@ -125,10 +125,10 @@ defaults:
     dormant: {enable: False, tau: 0.025}
     adaptive_policy:
       enable: False
-      ema_span_short: 1
-      ema_span_long: 25
+      ema_span_short: 10
+      ema_span_long: 1000
       target_std_small: 0.1
-      target_std_large: 2
+      target_std_large: 1.0
       explore_limit: 5
       default_force: 2
     intrinsic:
