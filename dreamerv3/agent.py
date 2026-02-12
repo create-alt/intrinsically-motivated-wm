@@ -26,6 +26,7 @@ class SharedMLPHead(nj.Module):
 
     def __init__(self, space, dists, names, **kw):
         self.names = names
+        self._heads_initialized = False
         valid_mlp_keys = {
             'layers', 'units', 'act', 'norm', 'bias',
             'winit', 'binit'
@@ -48,7 +49,10 @@ class SharedMLPHead(nj.Module):
 
     def __call__(self, x, bdims, name=None):
         feat = self.backbone_mlp(x)
+        if name and self._heads_initialized:
+            return self.heads[name](feat, bdims)
         all_outs = {n: h(feat, bdims) for n, h in self.heads.items()}
+        self._heads_initialized = True
         if name:
             return all_outs[name]
         return all_outs
@@ -187,40 +191,9 @@ class Agent(embodied.jax.Agent):
             self.dec.initial(batch_size),
         )
         if self.config.adaptive_policy.enable:
-            # Dummy input to initialize all SharedMLPHead parameters
-            if self.config.dyn.rssm.get('dist', 'onehot') == 'normal':
-                feat_dim = self.dyn.deter + self.dyn.stoch
-            else:
-                feat_dim = self.dyn.deter + self.dyn.stoch * self.dyn.classes
-            dummy_x = jnp.zeros((batch_size, feat_dim), jnp.bfloat16)
-            p_out = self.pol(dummy_x, bdims=1)
-            v_out = self.val(dummy_x, bdims=1)
-            s_out = self.slowval(dummy_x, bdims=1)
-
-            def get_tensor(x):
-                while hasattr(x, 'output'):
-                    x = x.output
-                if hasattr(x, 'dist'):
-                    x = x.dist
-                if hasattr(x, 'logits'): return x.logits
-                if hasattr(x, 'logit'): return x.logit
-                if hasattr(x, 'mean'): return x.mean
-                if hasattr(x, 'mode'): return x.mode()
-                if hasattr(x, 'pred'): return x.pred()
-                return x
-
-            outs = [p_out, v_out, s_out]
-            leaves = jax.tree.leaves(jax.tree.map(get_tensor, outs))
-            valid_leaves = [x for x in leaves if hasattr(x, 'dtype')]
-            if valid_leaves:
-                dummy_sum = sum([jnp.sum(x).astype(f32) for x in valid_leaves])
-                dummy_dependency = dummy_sum * 0.0
-            else:
-                dummy_dependency = jnp.array(0.0, dtype=f32)
-
             # EMA State: (mean_short, mean_long, diff_short, diff_long, count)
             ema_state = (
-                jnp.zeros((batch_size,), f32) + dummy_dependency,
+                jnp.zeros((batch_size,), f32),
                 jnp.zeros((batch_size,), f32),
                 jnp.zeros((batch_size,), f32),
                 jnp.zeros((batch_size,), f32),

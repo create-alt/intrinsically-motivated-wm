@@ -96,6 +96,7 @@ for SEED in 0 1 2 3 4; do
         --agent.dormant.enable True \
         --agent.dormant.tau 0.025 \
         --jax.platform cuda \
+        --jax.profiler False \
         --logger.outputs jsonl,wandb \
         --logger.videos False \
         2>&1 | tee ${LOG_DIR}/log.log
