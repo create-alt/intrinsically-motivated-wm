@@ -1,13 +1,14 @@
 # 実験結果
 
-Ms. Pac-Man における実験結果のまとめである。実験に使用したスクリプトは `exp_script` ディレクトリに配置されている。
+Ms. Pac-Man および Freeway における実験結果のまとめである。実験に使用したスクリプトは `exp_script` ディレクトリに配置されている。
 
 ---
 
 ## 1. ベースライン実験の再現
 
 **スクリプト:**
-- [`exp_script/251226_run_mspackman_dormat.sh`](exp_script/251226_run_mspackman_dormat.sh)
+- [`exp_script/260126_run_mspacman_baseline_vs_trendmix_5seeds.sh`](exp_script/260126_run_mspacman_baseline_vs_trendmix_5seeds.sh)
+- [`exp_script/260205_run_freeway_baseline_5seeds.sh`](exp_script/260205_run_freeway_baseline_5seeds.sh)
 
 ### 仮説
 
@@ -17,9 +18,15 @@ Ms. Pac-Man における実験結果のまとめである。実験に使用し�
 
 #### 報酬
 
-- 論文で提示されている性能と概ね一致した
+- 論文で提示されている性能と概ね一致した（5 seed での実験）
 
-![Baseline Result](./assets/mspackman_baseline.png)
+##### Ms. Pac-Man
+
+![Baseline Result (Ms. Pac-Man)](./assets/mspackman_baseline_5seed.png)
+
+##### Freeway
+
+![Baseline Result (Freeway)](./assets/freeway_baseline_5seed.png)
 
 #### 休眠ニューロン計測 (Dormant Neuron Monitoring)
 
@@ -133,11 +140,17 @@ total_rew = weight_upper × rew_ext + weight_lower × visual_bonus
 
 ---
 
-## 3. リプレイサンプリング戦略 (Replay Sampling Strategies)
+## 3. 適応的ポリシー切替 (Adaptive Policy)
+
+（実験結果は追記予定）
+
+---
+
+## 4. リプレイサンプリング戦略 (Replay Sampling Strategies)
 
 これらの手法は学習データの分布を変化させるため、広義の内発的動機付けとみなすことができる。
 
-### 3.1 Curious Replay（サンプリング戦略のベースライン）
+### 4.1 Curious Replay（サンプリング戦略のベースライン）
 
 **スクリプト:**
 - [`exp_script/251229_run_mspackman_curious.sh`](exp_script/251229_run_mspackman_curious.sh)
@@ -170,7 +183,7 @@ priority = c × β^visit_count + (model_loss + ε)^α
 - Curious Replay の論文を再現することができた
 - 大差ではないため、複数 seed での実験を行うべき
 
-### 3.2 Curious Replay（エントロピー調整）
+### 4.2 Curious Replay（エントロピー調整）
 
 エントロピー調整（`H(stoch)`）を有効にした Curious Replay の比較結果である。
 
@@ -206,14 +219,13 @@ priority = c × β^visit_count + (adjusted_loss + ε)^α
 - 確率的状態のエントロピー（H(stoch)）は、特に序盤では未学習を表す可能性がある
 - そのような未学習な状態の学習を抑制してしまった可能性がある
 
-### 3.3 探索/活用バランシング (TrendMix)
+### 4.3 探索/活用バランシング (TrendMix)
 
 報酬のトレンドに基づいて探索と活用をバランスさせる手法である。
 
 **スクリプト:**
-- [`exp_script/260104_run_mspackman_trendmix_multi.sh`](exp_script/260104_run_mspackman_trendmix_multi.sh)
-- [`exp_script/260105_run_mspackman_trendmix_multi.sh`](exp_script/260105_run_mspackman_trendmix_multi.sh)
-- [`exp_script/260106_run_mspackman_trendmix_multi.sh`](exp_script/260106_run_mspackman_trendmix_multi.sh)
+- [`exp_script/260126_run_mspacman_baseline_vs_trendmix_5seeds.sh`](exp_script/260126_run_mspacman_baseline_vs_trendmix_5seeds.sh)
+- [`exp_script/260207_run_freeway_trendmix_5seeds.sh`](exp_script/260207_run_freeway_trendmix_5seeds.sh)
 
 **実装:**
 - [`embodied/core/selectors.py`](embodied/core/selectors.py) - `TrendMix` クラス
@@ -249,7 +261,15 @@ exploit_frac = trend_total × gate
 
 #### 結果
 
-![TrendMix](./assets/mspackman_trendmix.png)
+5 seed での実験結果を以下に示す。
+
+##### Ms. Pac-Man
+
+![TrendMix (Ms. Pac-Man)](./assets/mspackman_trendmix_5seed.png)
+
+##### Freeway
+
+![TrendMix (Freeway)](./assets/freeway_trendmix_5seed.png)
 
 #### 考察
 
