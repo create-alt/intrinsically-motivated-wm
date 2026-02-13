@@ -206,7 +206,7 @@ priority = c × β^visit_count + (adjusted_loss + ε)^α
 - 確率的状態のエントロピー（H(stoch)）は、特に序盤では未学習を表す可能性がある
 - そのような未学習な状態の学習を抑制してしまった可能性がある
 
-### 3.3 探索/活用バランシング (TrendMixture)
+### 3.3 探索/活用バランシング (TrendMix)
 
 報酬のトレンドに基づいて探索と活用をバランスさせる手法である。
 
@@ -216,7 +216,7 @@ priority = c × β^visit_count + (adjusted_loss + ε)^α
 - [`exp_script/260106_run_mspackman_trendmix_multi.sh`](exp_script/260106_run_mspackman_trendmix_multi.sh)
 
 **実装:**
-- [`embodied/core/selectors.py`](embodied/core/selectors.py) - `TrendMixture` クラス
+- [`embodied/core/selectors.py`](embodied/core/selectors.py) - `TrendMix` クラス
 - [`embodied/core/replay.py`](embodied/core/replay.py) - `_update_trend` メソッド
 - [`dreamerv3/agent.py`](dreamerv3/agent.py) - 優先度計算（KL divergence）
 
@@ -249,7 +249,7 @@ exploit_frac = trend_total × gate
 
 #### 結果
 
-![TrendMixture](./assets/mspackman_trendmix.png)
+![TrendMix](./assets/mspackman_trendmix.png)
 
 #### 考察
 

@@ -148,7 +148,7 @@ replay:
 --configs atari curious_replay
 ```
 
-#### 2.2 探索/活用バランシング (TrendMixture)
+#### 2.2 探索/活用バランシング (TrendMix)
 
 
 
@@ -156,7 +156,7 @@ replay:
 
 - **Explore priority**: `KL(posterior || prior)` - 不確実性が高い → とりあえず探索
 - **Exploit priority**: `1 / KL` - 不確実性が低い（自信がある） → 知識を活用
-- **TrendMixture**: スパンの短いEMAと長いEMAを使って報酬のトレンドを検知し、ゲートを調整する
+- **TrendMix**: スパンの短いEMAと長いEMAを使って報酬のトレンドを検知し、ゲートを調整する
 
 ```yaml
 replay:
