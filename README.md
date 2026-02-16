@@ -14,7 +14,7 @@ DreamerV3のフォークに対して「内発的報酬」の機能を追加し�
 
 ## 概要
 
-[DreamerV3](https://arxiv.org/pdf/2301.04104) は経験から世界モデルを学習し、想像上の軌道を用いて Actor-Critic を訓練するモデルである。このフォークでは、**「内発的報酬」**、**「適応的ポリシー切替」**、および **「リプレイバッファからのサンプリング戦略（広義の内発的報酬）」** を追加することで、探索性能の向上を目指している。
+[DreamerV3](https://arxiv.org/pdf/2301.04104) は経験から世界モデルを学習し、想像上の軌道を用いて Actor-Critic を訓練するモデルである。このフォークでは、**「内発的報酬」**、**「EMA-Based Policy Shifting」**、および **「リプレイバッファからのサンプリング戦略（広義の内発的報酬）」** を追加することで、探索性能の向上を目指している。
 
 ---
 
@@ -49,7 +49,7 @@ Atari-100K 設定下の一部の Atari 環境における予備的な実験で�
 本実装では、主に以下4つの機能カテゴリを追加している：
 
 1. **Intrinsic Reward / 内発的報酬** - 想像ロールアウト時に適用される報酬形成
-2. **Adaptive Policy / 適応的ポリシー切替** - 報酬トレンドに基づくexploration/exploitation切替
+2. **EMA-Based Policy Shifting** - 報酬トレンドに基づくexploration/exploitation切替
 3. **Replay Sampling Strategies / リプレイサンプリング戦略** - 優先度ベースの経験サンプリング（広義の内発的報酬）
 4. **Dormant Neuron Monitoring / 休眠ニューロン計測** - ネットワーク健全性診断
 
@@ -101,7 +101,7 @@ agent:
 
 ---
 
-### 2. 適応的ポリシー切替 (Adaptive Policy)
+### 2. EMA-Based Policy Shifting
 
 報酬の指数移動平均（EMA）トレンドに基づき、3つのポリシー（main / small / large）を動的に切り替える機構である。SharedMLPHead による共有バックボーン＋3ヘッド構成により、パラメータ効率を保ちつつ異なる探索戦略を同時に学習する。
 
@@ -129,7 +129,7 @@ agent:
 
 ```yaml
 agent:
-  adaptive_policy:
+  ema_policy_shifting:
     enable: True
     ema_span_short: 10      # 短期EMAスパン
     ema_span_long: 1000     # 長期EMAスパン

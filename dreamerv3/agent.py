@@ -122,12 +122,12 @@ class Agent(embodied.jax.Agent):
 
         self.intrinsic = intrinsic.make_intrinsic_reward(config, decoder=self.dec)
 
-        # --- AdaptivePolicy Exploration Networks ---
-        if config.adaptive_policy.enable:
+        # --- EMA-Based Policy Shifting Exploration Networks ---
+        if config.ema_policy_shifting.enable:
             dist = config.dyn.rssm.get('dist', 'onehot')
             if dist != 'normal':
                 raise ValueError(
-                    f"adaptive_policy.enable=True requires dyn.rssm.dist='normal', "
+                    f"ema_policy_shifting.enable=True requires dyn.rssm.dist='normal', "
                     f"got '{dist}'. The std-based exploration reward assumes normal distribution."
                 )
             # SharedMLPHead: shared backbone + 3 heads for pol/val/slowval
@@ -137,12 +137,12 @@ class Agent(embodied.jax.Agent):
                 SharedMLPHead(scalar, {}, ['main', 'small', 'large'], **config.value, name='slowval_shared'),
                 source=self.val, **config.slowvalue)
 
-            self.span_short = config.adaptive_policy.ema_span_short
-            self.span_long = config.adaptive_policy.ema_span_long
-            self.alpha_small = config.adaptive_policy.target_std_small
-            self.alpha_large = config.adaptive_policy.target_std_large
-            self.explore_limit = config.adaptive_policy.explore_limit
-            self.default_force = config.adaptive_policy.default_force
+            self.span_short = config.ema_policy_shifting.ema_span_short
+            self.span_long = config.ema_policy_shifting.ema_span_long
+            self.alpha_small = config.ema_policy_shifting.target_std_small
+            self.alpha_large = config.ema_policy_shifting.target_std_large
+            self.explore_limit = config.ema_policy_shifting.explore_limit
+            self.default_force = config.ema_policy_shifting.default_force
 
         self.modules = [
             self.dyn,
@@ -162,7 +162,7 @@ class Agent(embodied.jax.Agent):
 
     @property
     def policy_keys(self):
-        if self.config.adaptive_policy.enable:
+        if self.config.ema_policy_shifting.enable:
             return "^(enc|dyn|dec|pol_shared)/"
         return "^(enc|dyn|dec|pol)/"
 
@@ -190,7 +190,7 @@ class Agent(embodied.jax.Agent):
             self.dyn.initial(batch_size),
             self.dec.initial(batch_size),
         )
-        if self.config.adaptive_policy.enable:
+        if self.config.ema_policy_shifting.enable:
             # EMA State: (mean_short, mean_long, diff_short, diff_long, count)
             ema_state = (
                 jnp.zeros((batch_size,), f32),
@@ -209,7 +209,7 @@ class Agent(embodied.jax.Agent):
         return self.init_policy(batch_size)
 
     def policy(self, carry, obs, mode="train"):
-        if self.config.adaptive_policy.enable:
+        if self.config.ema_policy_shifting.enable:
             return self._policy_adaptive(carry, obs, mode)
         return self._policy_default(carry, obs, mode)
 
@@ -389,8 +389,8 @@ class Agent(embodied.jax.Agent):
         return carry, outs, metrics
 
     def loss(self, carry, obs, prevact, training, return_features=False):
-        # Unpack carry based on adaptive_policy mode
-        if self.config.adaptive_policy.enable:
+        # Unpack carry based on ema_policy_shifting mode
+        if self.config.ema_policy_shifting.enable:
             enc_carry, dyn_carry, dec_carry, ema_state = carry
         else:
             enc_carry, dyn_carry, dec_carry = carry
@@ -428,8 +428,8 @@ class Agent(embodied.jax.Agent):
         starts = self.dyn.starts(dyn_entries, dyn_carry, K)
         starts = sg(starts)
 
-        if self.config.adaptive_policy.enable:
-            # --- AdaptivePolicy: Train all 3 policies via SharedMLPHead ---
+        if self.config.ema_policy_shifting.enable:
+            # --- EMA-Based Policy Shifting: Train all 3 policies via SharedMLPHead ---
             def compute_policy_loss(policy_net, value_net, slowval_net, head_name, reward_fn_type='default', suffix=''):
                 policyfn = lambda feat: sample(policy_net(self.feat2tensor(feat), 1, name=head_name))
 
@@ -491,7 +491,7 @@ class Agent(embodied.jax.Agent):
             losses.update(los_l)
             metrics.update(mets_l)
 
-            # Skip repval_loss for adaptive policy mode
+            # Skip repval_loss for EMA-based policy shifting mode
             imgloss_out = {"ret": jnp.zeros((B * K, H))}
 
             # Compute total loss with scale mapping for suffixed keys
@@ -572,7 +572,7 @@ class Agent(embodied.jax.Agent):
             loss = sum([v.mean() * self.scales[k] for k, v in losses.items()])
 
         # Pack carry for return
-        if self.config.adaptive_policy.enable:
+        if self.config.ema_policy_shifting.enable:
             carry = (enc_carry, dyn_carry, dec_carry, ema_state)
         else:
             carry = (enc_carry, dyn_carry, dec_carry)
@@ -600,8 +600,8 @@ class Agent(embodied.jax.Agent):
 
         carry, obs, prevact, _ = self._apply_replay_context(carry, data)
 
-        # Unpack carry based on adaptive_policy mode
-        if self.config.adaptive_policy.enable:
+        # Unpack carry based on ema_policy_shifting mode
+        if self.config.ema_policy_shifting.enable:
             (enc_carry, dyn_carry, dec_carry, ema_state) = carry
         else:
             (enc_carry, dyn_carry, dec_carry) = carry
@@ -661,7 +661,7 @@ class Agent(embodied.jax.Agent):
             for idx, layer in enumerate(con_layers):
                 add_metric(f"world_con_layer{idx}", layer, world_means, penultimate=True)
 
-            if not self.config.adaptive_policy.enable:
+            if not self.config.ema_policy_shifting.enable:
                 _, pol_layers = self.pol(inp, 2, return_layers=True)
                 for idx, layer in enumerate(pol_layers):
                     add_metric(f"actor_layer{idx}", layer, actor_means)
@@ -727,8 +727,8 @@ class Agent(embodied.jax.Agent):
         return carry, metrics
 
     def _apply_replay_context(self, carry, data):
-        # Unpack carry based on adaptive_policy mode
-        if self.config.adaptive_policy.enable:
+        # Unpack carry based on ema_policy_shifting mode
+        if self.config.ema_policy_shifting.enable:
             (enc_carry, dyn_carry, dec_carry, ema_state, prevact) = carry
         else:
             (enc_carry, dyn_carry, dec_carry, prevact) = carry
@@ -739,7 +739,7 @@ class Agent(embodied.jax.Agent):
         prevact = {k: prepend(prevact[k], data[k]) for k in self.act_space}
 
         # Pack carry without prevact (and with ema_state if adaptive)
-        if self.config.adaptive_policy.enable:
+        if self.config.ema_policy_shifting.enable:
             carry = (enc_carry, dyn_carry, dec_carry, ema_state)
         else:
             carry = (enc_carry, dyn_carry, dec_carry)
@@ -753,7 +753,7 @@ class Agent(embodied.jax.Agent):
         lhs = lambda xs: jax.tree.map(lambda x: x[:, :K], xs)
         rhs = lambda xs: jax.tree.map(lambda x: x[:, K:], xs)
 
-        if self.config.adaptive_policy.enable:
+        if self.config.ema_policy_shifting.enable:
             rep_carry = (
                 self.enc.truncate(lhs(entries[0]), enc_carry),
                 self.dyn.truncate(lhs(entries[1]), dyn_carry),

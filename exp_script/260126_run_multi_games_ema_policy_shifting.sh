@@ -2,22 +2,22 @@
 
 # セルフデタッチ: 引数なしで呼ばれたら、自分自身をnohupでバックグラウンド実行
 if [ "$1" != "--running" ]; then
-    MASTER_LOG="log/multi_experiment_adaptive_policy_$(date '+%y%m%d%H%M').log"
+    MASTER_LOG="log/multi_experiment_ema_policy_shifting_$(date '+%y%m%d%H%M').log"
     mkdir -p log
     nohup "$0" --running > "$MASTER_LOG" 2>&1 &
     PID=$!
     echo "=========================================="
-    echo "All 5 AdaptivePolicy experiments started in background"
+    echo "All 5 EMA-Based Policy Shifting experiments started in background"
     echo "  PID: $PID"
     echo "  Master log: $MASTER_LOG"
     echo "=========================================="
     echo ""
-    echo "Experiments (AdaptivePolicy enabled):"
-    echo "  1. Bank Heist - adaptive_policy"
-    echo "  2. Frostbite - adaptive_policy"
-    echo "  3. Hero - adaptive_policy"
-    echo "  4. Seaquest - adaptive_policy"
-    echo "  5. Ms Pacman - adaptive_policy"
+    echo "Experiments (EMA-Based Policy Shifting enabled):"
+    echo "  1. Bank Heist - ema_policy_shifting"
+    echo "  2. Frostbite - ema_policy_shifting"
+    echo "  3. Hero - ema_policy_shifting"
+    echo "  4. Seaquest - ema_policy_shifting"
+    echo "  5. Ms Pacman - ema_policy_shifting"
     echo ""
     echo "Useful commands:"
     echo "  Monitor:       tail -f $MASTER_LOG"
@@ -42,7 +42,7 @@ fi
 source .venv/bin/activate
 
 echo "=========================================="
-echo "Starting AdaptivePolicy experiments"
+echo "Starting EMA-Based Policy Shifting experiments"
 echo "Started at: $(date)"
 echo "=========================================="
 
@@ -52,10 +52,10 @@ nvidia-smi
 echo ""
 
 ###############################################################################
-# 実験1: Bank Heist - adaptive_policy
+# 実験1: Bank Heist - ema_policy_shifting
 ###############################################################################
 TASK="bank_heist"
-EXP_NAME="adaptive_policy"
+EXP_NAME="ema_policy_shifting"
 TIME_STR=$(date '+%y%m%d%H%M')
 LOG_DIR="log/${TIME_STR}_dreamerV3_atari100k_${TASK}_${EXP_NAME}"
 mkdir -p ${LOG_DIR}
@@ -74,7 +74,7 @@ python dreamerv3/main.py \
     --seed 0 \
     --agent.dormant.enable True \
     --agent.dormant.tau 0.025 \
-    --agent.adaptive_policy.enable True \
+    --agent.ema_policy_shifting.enable True \
     --jax.platform cuda \
     --jax.profiler False \
     --logger.outputs jsonl,wandb \
@@ -85,10 +85,10 @@ echo "[Experiment 1] ${TASK} - ${EXP_NAME} Finished at: $(date)"
 echo ""
 
 ###############################################################################
-# 実験2: Frostbite - adaptive_policy
+# 実験2: Frostbite - ema_policy_shifting
 ###############################################################################
 TASK="frostbite"
-EXP_NAME="adaptive_policy"
+EXP_NAME="ema_policy_shifting"
 TIME_STR=$(date '+%y%m%d%H%M')
 LOG_DIR="log/${TIME_STR}_dreamerV3_atari100k_${TASK}_${EXP_NAME}"
 mkdir -p ${LOG_DIR}
@@ -107,7 +107,7 @@ python dreamerv3/main.py \
     --seed 0 \
     --agent.dormant.enable True \
     --agent.dormant.tau 0.025 \
-    --agent.adaptive_policy.enable True \
+    --agent.ema_policy_shifting.enable True \
     --jax.platform cuda \
     --jax.profiler False \
     --logger.outputs jsonl,wandb \
@@ -118,10 +118,10 @@ echo "[Experiment 2] ${TASK} - ${EXP_NAME} Finished at: $(date)"
 echo ""
 
 ###############################################################################
-# 実験3: Hero - adaptive_policy
+# 実験3: Hero - ema_policy_shifting
 ###############################################################################
 TASK="hero"
-EXP_NAME="adaptive_policy"
+EXP_NAME="ema_policy_shifting"
 TIME_STR=$(date '+%y%m%d%H%M')
 LOG_DIR="log/${TIME_STR}_dreamerV3_atari100k_${TASK}_${EXP_NAME}"
 mkdir -p ${LOG_DIR}
@@ -140,7 +140,7 @@ python dreamerv3/main.py \
     --seed 0 \
     --agent.dormant.enable True \
     --agent.dormant.tau 0.025 \
-    --agent.adaptive_policy.enable True \
+    --agent.ema_policy_shifting.enable True \
     --jax.platform cuda \
     --jax.profiler False \
     --logger.outputs jsonl,wandb \
@@ -151,10 +151,10 @@ echo "[Experiment 3] ${TASK} - ${EXP_NAME} Finished at: $(date)"
 echo ""
 
 ###############################################################################
-# 実験4: Seaquest - adaptive_policy
+# 実験4: Seaquest - ema_policy_shifting
 ###############################################################################
 TASK="seaquest"
-EXP_NAME="adaptive_policy"
+EXP_NAME="ema_policy_shifting"
 TIME_STR=$(date '+%y%m%d%H%M')
 LOG_DIR="log/${TIME_STR}_dreamerV3_atari100k_${TASK}_${EXP_NAME}"
 mkdir -p ${LOG_DIR}
@@ -173,7 +173,7 @@ python dreamerv3/main.py \
     --seed 0 \
     --agent.dormant.enable True \
     --agent.dormant.tau 0.025 \
-    --agent.adaptive_policy.enable True \
+    --agent.ema_policy_shifting.enable True \
     --jax.platform cuda \
     --jax.profiler False \
     --logger.outputs jsonl,wandb \
@@ -184,10 +184,10 @@ echo "[Experiment 4] ${TASK} - ${EXP_NAME} Finished at: $(date)"
 echo ""
 
 ###############################################################################
-# 実験5: Ms Pacman - adaptive_policy
+# 実験5: Ms Pacman - ema_policy_shifting
 ###############################################################################
 TASK="ms_pacman"
-EXP_NAME="adaptive_policy"
+EXP_NAME="ema_policy_shifting"
 TIME_STR=$(date '+%y%m%d%H%M')
 LOG_DIR="log/${TIME_STR}_dreamerV3_atari100k_${TASK}_${EXP_NAME}"
 mkdir -p ${LOG_DIR}
@@ -206,7 +206,7 @@ python dreamerv3/main.py \
     --seed 0 \
     --agent.dormant.enable True \
     --agent.dormant.tau 0.025 \
-    --agent.adaptive_policy.enable True \
+    --agent.ema_policy_shifting.enable True \
     --jax.platform cuda \
     --jax.profiler False \
     --logger.outputs jsonl,wandb \
@@ -218,5 +218,5 @@ echo ""
 
 ###############################################################################
 echo "=========================================="
-echo "All AdaptivePolicy experiments completed at: $(date)"
+echo "All EMA-Based Policy Shifting experiments completed at: $(date)"
 echo "=========================================="

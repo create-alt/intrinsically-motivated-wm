@@ -140,7 +140,7 @@ total_rew = weight_upper × rew_ext + weight_lower × visual_bonus
 
 ---
 
-## 3. 適応的ポリシー切替 (Adaptive Policy)
+## 3. EMA-Based Policy Shifting
 
 （実験結果は追記予定）
 

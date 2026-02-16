@@ -123,7 +123,7 @@ defaults:
     report: True
     report_gradnorms: False
     dormant: {enable: False, tau: 0.025}
-    adaptive_policy:
+    ema_policy_shifting:
       enable: False
       ema_span_short: 10
       ema_span_long: 1000
