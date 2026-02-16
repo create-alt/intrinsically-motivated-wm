@@ -2,6 +2,8 @@
 
 Ms. Pac-Man および Freeway における実験結果のまとめである。実験に使用したスクリプトは `exp_script` ディレクトリに配置されている。
 
+> 📄 **論文報告対象:** [3. EMA-Based Policy Shifting](#3-ema-based-policy-shifting) / [4.3 探索/活用バランシング (TrendMix)](#43-探索活用バランシング-trendmix)
+
 ---
 
 ## 1. ベースライン実験の再現
@@ -142,7 +144,50 @@ total_rew = weight_upper × rew_ext + weight_lower × visual_bonus
 
 ## 3. EMA-Based Policy Shifting
 
-（実験結果は追記予定）
+> 📄 **本手法は論文で報告する提案手法である。**
+
+**実装:** [`dreamerv3/agent.py`](dreamerv3/agent.py) - `SharedMLPHead` クラスおよび `_policy_adaptive` メソッド
+
+DreamerV3 において利用されている行動決定用 policy を報酬の遷移によって動的に切り替える手法である。具体的には、2通りのスパンで計算した EMA の勾配の符号に基づいて、意思決定時に使用する policy を切り替える。policy の種類としては、通常の報酬ベースでの学習を行うもの（main）、行動の標準偏差を減少させるもの（small）、増大させるもの（large）の3通りを用意した。
+
+切替ロジック：
+
+```
+# EMAトレンド検出
+mean_short = EMA(reward, span=β_short)
+mean_long  = EMA(reward, span=β_long)
+diff_short = mean_short_new - mean_short_old
+diff_long  = mean_long_new  - mean_long_old
+
+# ポリシー選択
+短期↑ & 長期↑ → main（活用: 通常の報酬ベース学習）
+短期↓ & 長期↑ → small（慎重な探索: target_std=α_small）
+それ以外      → large（積極的探索: target_std=α_large）
+```
+
+ここで α と β はハイパーパラメータであり、それぞれある policy が出力する行動の標準偏差の目標値とスパン調整用係数である。
+
+### 仮説
+
+- スコアが停滞しやすい学習初期において、EMA トレンドに基づくポリシー切替が探索を強め、早期の報酬獲得を促進するのではないか
+- 複数の探索戦略（標準偏差の増減）を同時に学習し、報酬トレンドに応じて動的に使い分けることで、単一ポリシーよりも柔軟な探索が可能になるのではないか
+
+### 結果
+
+#### Krull
+
+![EMA-Based Policy Shifting (Krull)](./assets/ema_policy_shifting_krull.png)
+
+#### Freeway
+
+![EMA-Based Policy Shifting (Freeway)](./assets/ema_policy_shifting_freeway.png)
+
+EMA-Based Policy Shifting を同条件のベースラインと比較した結果、Freeway では学習初期段階から報酬を獲得することができており、ベースライン（セクション1）や TrendMix（セクション4.3）と比較して性能の向上が見られた。さらに、DreamerV3 に内発的報酬を導入した先行研究である DreamerV3-XP (Bierling 2025) の実験結果と EMA-Based Policy Shifting の結果を比較すると、最終的な性能は劣っているものの、Freeway の学習初期段階から高スコアを獲得可能となる結果が見られた。
+
+### 考察
+
+- EMA-Based Policy Shifting が、スコアが停滞しやすい学習初期において探索を強める挙動が確認できた
+- その後の活用フェーズについては安定性に懸念が残るものの学習は進んでおり、EMA のスパン調整をはじめとした追加検証が必要である
 
 ---
 
@@ -220,6 +265,8 @@ priority = c × β^visit_count + (adjusted_loss + ε)^α
 - そのような未学習な状態の学習を抑制してしまった可能性がある
 
 ### 4.3 探索/活用バランシング (TrendMix)
+
+> 📄 **本手法は論文で報告する提案手法である。**
 
 報酬のトレンドに基づいて探索と活用をバランスさせる手法である。
 

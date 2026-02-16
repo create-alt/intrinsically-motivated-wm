@@ -4,6 +4,8 @@ DreamerV3のフォークに対して「内発的報酬」の機能を追加し�
 
 本リポジトリは DreamerV3 をフォークし、様々な「内発的報酬」の機能を追加した実装である。
 
+> 📄 **論文報告対象:** [2. EMA-Based Policy Shifting](#2-ema-based-policy-shifting) / [3.2 探索/活用バランシング (TrendMix)](#32--探索活用バランシング-trendmix)
+
 ---
 
 ## 実験結果
@@ -49,8 +51,9 @@ Atari-100K 設定下の一部の Atari 環境における予備的な実験で�
 本実装では、主に以下4つの機能カテゴリを追加している：
 
 1. **Intrinsic Reward / 内発的報酬** - 想像ロールアウト時に適用される報酬形成
-2. **EMA-Based Policy Shifting** - 報酬トレンドに基づくexploration/exploitation切替
+2. 📄 **EMA-Based Policy Shifting** - 報酬トレンドに基づくexploration/exploitation切替
 3. **Replay Sampling Strategies / リプレイサンプリング戦略** - 優先度ベースの経験サンプリング（広義の内発的報酬）
+   - 3.2 📄 **探索/活用バランシング (TrendMix)** - 報酬トレンドに基づく探索/活用の動的バランシング
 4. **Dormant Neuron Monitoring / 休眠ニューロン計測** - ネットワーク健全性診断
 
 ---
@@ -102,6 +105,8 @@ agent:
 ---
 
 ### 2. EMA-Based Policy Shifting
+
+> 📄 **本手法は論文で報告する提案手法である。**
 
 報酬の指数移動平均（EMA）トレンドに基づき、3つのポリシー（main / small / large）を動的に切り替える機構である。SharedMLPHead による共有バックボーン＋3ヘッド構成により、パラメータ効率を保ちつつ異なる探索戦略を同時に学習する。
 
@@ -194,9 +199,9 @@ replay:
 --configs atari curious_replay
 ```
 
-#### 3.2 探索/活用バランシング (TrendMix)
+#### 3.2 📄 探索/活用バランシング (TrendMix)
 
-
+> 📄 **本手法は論文で報告する提案手法である。**
 
 報酬のトレンドに基づき、探索重視のサンプリングと活用重視のサンプリングの比率を動的に調整する。
 
