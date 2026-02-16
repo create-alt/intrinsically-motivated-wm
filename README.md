@@ -4,6 +4,8 @@ DreamerV3のフォークに対して「内発的報酬」の機能を追加し�
 
 本リポジトリは DreamerV3 をフォークし、様々な「内発的報酬」の機能を追加した実装である。
 
+> 📄 **論文報告対象:** [2. EMA-Based Policy Shifting](#2-ema-based-policy-shifting) / [3.2 探索/活用バランシング (TrendMix)](#32--探索活用バランシング-trendmix)
+
 ---
 
 ## 実験結果
@@ -14,7 +16,7 @@ DreamerV3のフォークに対して「内発的報酬」の機能を追加し�
 
 ## 概要
 
-[DreamerV3](https://arxiv.org/pdf/2301.04104) は経験から世界モデルを学習し、想像上の軌道を用いて Actor-Critic を訓練するモデルである。このフォークでは、**「内発的報酬」** および **「リプレイバッファからのサンプリング戦略（広義の内発的報酬）」** を追加することで、探索性能の向上を目指している。
+[DreamerV3](https://arxiv.org/pdf/2301.04104) は経験から世界モデルを学習し、想像上の軌道を用いて Actor-Critic を訓練するモデルである。このフォークでは、**「内発的報酬」**、**「EMA-Based Policy Shifting」**、および **「リプレイバッファからのサンプリング戦略（広義の内発的報酬）」** を追加することで、探索性能の向上を目指している。
 
 ---
 
@@ -46,11 +48,13 @@ Atari-100K 設定下の一部の Atari 環境における予備的な実験で�
 
 ## 追加機能
 
-本実装では、主に以下3つの機能カテゴリを追加している：
+本実装では、主に以下4つの機能カテゴリを追加している：
 
 1. **Intrinsic Reward / 内発的報酬** - 想像ロールアウト時に適用される報酬形成
-2. **Replay Sampling Strategies / リプレイサンプリング戦略** - 優先度ベースの経験サンプリング（広義の内発的報酬）
-3. **Dormant Neuron Monitoring / 休眠ニューロン計測** - ネットワーク健全性診断
+2. 📄 **EMA-Based Policy Shifting** - 報酬トレンドに基づくexploration/exploitation切替
+3. **Replay Sampling Strategies / リプレイサンプリング戦略** - 優先度ベースの経験サンプリング（広義の内発的報酬）
+   - 3.2 📄 **探索/活用バランシング (TrendMix)** - 報酬トレンドに基づく探索/活用の動的バランシング
+4. **Dormant Neuron Monitoring / 休眠ニューロン計測** - ネットワーク健全性診断
 
 ---
 
@@ -100,13 +104,60 @@ agent:
 
 ---
 
-### 2. リプレイサンプリング戦略
+### 2. EMA-Based Policy Shifting
+
+> 📄 **本手法は論文で報告する提案手法である。**
+
+報酬の指数移動平均（EMA）トレンドに基づき、3つのポリシー（main / small / large）を動的に切り替える機構である。SharedMLPHead による共有バックボーン＋3ヘッド構成により、パラメータ効率を保ちつつ異なる探索戦略を同時に学習する。
+
+#### 仕組み
+
+- **SharedMLPHead**: 共有バックボーン MLP の出力を3つの独立したヘッド（main / small / large）に分岐させる。ポリシーネットワークとバリューネットワークの両方がこの構成をとる。
+- **各ポリシーの報酬関数**:
+  - **main**: 外発的報酬＋内発的報酬（通常のDreamerV3と同等）
+  - **small**: RSSMの正規分布の標準偏差が `target_std_small`（デフォルト: 0.1）に近いほど高報酬 → 確信度の高い状態への活用を促進
+  - **large**: RSSMの正規分布の標準偏差が `target_std_large`（デフォルト: 1.0）に近いほど高報酬 → 不確実性の高い状態への探索を促進
+- **EMAベースの切替ロジック**: 短期EMA（span=10）と長期EMA（span=1000）の差分から報酬トレンドを検知し、使用するポリシーを選択する:
+
+| 短期トレンド | 長期トレンド | 選択ポリシー | 行動方針 |
+|---|---|---|---|
+| ↑ | ↑ | **main** | 活用: 短期・長期ともに改善中 |
+| ↓ | ↑ | **small** | 慎重な探索: 進捗が停滞 |
+| ↑ | ↓ | **large** | 積極的探索: トレンドが乖離 |
+| ↓ | ↓ | **large** | 積極的探索: 両方とも悪化 |
+
+- **強制リセット機構**: 探索ポリシーが `explore_limit`（デフォルト: 5）ステップ連続した場合、`default_force`（デフォルト: 2）ステップだけ強制的に main ポリシーに戻し、その後カウンタをリセットする。
+
+#### 前提条件
+
+- `dyn.rssm.dist: normal` が必須。small / large ポリシーの報酬関数が正規分布の標準偏差に依存するため、デフォルトの `onehot` では動作しない。
+
+```yaml
+agent:
+  ema_policy_shifting:
+    enable: True
+    ema_span_short: 10      # 短期EMAスパン
+    ema_span_long: 1000     # 長期EMAスパン
+    target_std_small: 0.1   # smallポリシーの目標std
+    target_std_large: 1.0   # largeポリシーの目標std
+    explore_limit: 5        # 探索ステップ上限
+    default_force: 2        # main強制ステップ数
+  dyn:
+    rssm:
+      dist: normal          # 必須設定
+```
+
+実装の詳細は `dreamerv3/agent.py` を参照されたい。
+
+---
+
+### 3. リプレイサンプリング戦略
 
 
 
 この戦略では、リプレイバッファからのサンプリング方法を変更し、特定の遷移を優先的に抽出することで学習効率の向上を図る。これはデータ選択レベルにおける内発的動機付けの一形態とみなせる。
 
-#### 2.1 Curious Replay（サンプリング戦略のベースライン）
+#### 3.1 Curious Replay（サンプリング戦略のベースライン）
 
 [Curious Replay for Model-based Adaptation](https://arxiv.org/abs/2306.15934) (Kauvar et al., ICML 2023) に基づく。実装の参考: [cr-dv3](https://github.com/AutonomousAgentsLab/cr-dv3)。
 
@@ -148,15 +199,15 @@ replay:
 --configs atari curious_replay
 ```
 
-#### 2.2 探索/活用バランシング (TrendMixture)
+#### 3.2 📄 探索/活用バランシング (TrendMix)
 
-
+> 📄 **本手法は論文で報告する提案手法である。**
 
 報酬のトレンドに基づき、探索重視のサンプリングと活用重視のサンプリングの比率を動的に調整する。
 
 - **Explore priority**: `KL(posterior || prior)` - 不確実性が高い → とりあえず探索
 - **Exploit priority**: `1 / KL` - 不確実性が低い（自信がある） → 知識を活用
-- **TrendMixture**: スパンの短いEMAと長いEMAを使って報酬のトレンドを検知し、ゲートを調整する
+- **TrendMix**: スパンの短いEMAと長いEMAを使って報酬のトレンドを検知し、ゲートを調整する
 
 ```yaml
 replay:
@@ -174,7 +225,7 @@ replay:
 
 ---
 
-### 3. 休眠ニューロン計測
+### 4. 休眠ニューロン計測
 
 [The Dormant Neuron Phenomenon in Deep Reinforcement Learning](https://arxiv.org/abs/2302.12902) (Sokar et al., ICML 2023) に基づく。
 

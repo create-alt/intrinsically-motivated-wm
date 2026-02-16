@@ -1,13 +1,16 @@
 # 実験結果
 
-Ms. Pac-Man における実験結果のまとめである。実験に使用したスクリプトは `exp_script` ディレクトリに配置されている。
+Ms. Pac-Man および Freeway における実験結果のまとめである。実験に使用したスクリプトは `exp_script` ディレクトリに配置されている。
+
+> 📄 **論文報告対象:** [3. EMA-Based Policy Shifting](#3-ema-based-policy-shifting) / [4.3 探索/活用バランシング (TrendMix)](#43-探索活用バランシング-trendmix)
 
 ---
 
 ## 1. ベースライン実験の再現
 
 **スクリプト:**
-- [`exp_script/251226_run_mspackman_dormat.sh`](exp_script/251226_run_mspackman_dormat.sh)
+- [`exp_script/260126_run_mspacman_baseline_vs_trendmix_5seeds.sh`](exp_script/260126_run_mspacman_baseline_vs_trendmix_5seeds.sh)
+- [`exp_script/260205_run_freeway_baseline_5seeds.sh`](exp_script/260205_run_freeway_baseline_5seeds.sh)
 
 ### 仮説
 
@@ -17,9 +20,15 @@ Ms. Pac-Man における実験結果のまとめである。実験に使用し�
 
 #### 報酬
 
-- 論文で提示されている性能と概ね一致した
+- 論文で提示されている性能と概ね一致した（5 seed での実験）
 
-![Baseline Result](./assets/mspackman_baseline.png)
+##### Ms. Pac-Man
+
+![Baseline Result (Ms. Pac-Man)](./assets/mspackman_baseline_5seed.png)
+
+##### Freeway
+
+![Baseline Result (Freeway)](./assets/freeway_baseline_5seed.png)
 
 #### 休眠ニューロン計測 (Dormant Neuron Monitoring)
 
@@ -133,11 +142,60 @@ total_rew = weight_upper × rew_ext + weight_lower × visual_bonus
 
 ---
 
-## 3. リプレイサンプリング戦略 (Replay Sampling Strategies)
+## 3. EMA-Based Policy Shifting
+
+> 📄 **本手法は論文で報告する提案手法である。**
+
+**実装:** [`dreamerv3/agent.py`](dreamerv3/agent.py) - `SharedMLPHead` クラスおよび `_policy_adaptive` メソッド
+
+DreamerV3 において利用されている行動決定用 policy を報酬の遷移によって動的に切り替える手法である。具体的には、2通りのスパンで計算した EMA の勾配の符号に基づいて、意思決定時に使用する policy を切り替える。policy の種類としては、通常の報酬ベースでの学習を行うもの（main）、行動の標準偏差を減少させるもの（small）、増大させるもの（large）の3通りを用意した。
+
+切替ロジック：
+
+```
+# EMAトレンド検出
+mean_short = EMA(reward, span=β_short)
+mean_long  = EMA(reward, span=β_long)
+diff_short = mean_short_new - mean_short_old
+diff_long  = mean_long_new  - mean_long_old
+
+# ポリシー選択
+短期↑ & 長期↑ → main（活用: 通常の報酬ベース学習）
+短期↓ & 長期↑ → small（慎重な探索: target_std=α_small）
+それ以外      → large（積極的探索: target_std=α_large）
+```
+
+ここで α と β はハイパーパラメータであり、それぞれある policy が出力する行動の標準偏差の目標値とスパン調整用係数である。
+
+### 仮説
+
+- スコアが停滞しやすい学習初期において、EMA トレンドに基づくポリシー切替が探索を強め、早期の報酬獲得を促進するのではないか
+- 複数の探索戦略（標準偏差の増減）を同時に学習し、報酬トレンドに応じて動的に使い分けることで、単一ポリシーよりも柔軟な探索が可能になるのではないか
+
+### 結果
+
+#### Krull
+
+![EMA-Based Policy Shifting (Krull)](./assets/ema_policy_shifting_krull.png)
+
+#### Freeway
+
+![EMA-Based Policy Shifting (Freeway)](./assets/ema_policy_shifting_freeway.png)
+
+EMA-Based Policy Shifting を同条件のベースラインと比較した結果、Freeway では学習初期段階から報酬を獲得することができており、ベースライン（セクション1）や TrendMix（セクション4.3）と比較して性能の向上が見られた。さらに、DreamerV3 に内発的報酬を導入した先行研究である DreamerV3-XP (Bierling 2025) の実験結果と EMA-Based Policy Shifting の結果を比較すると、最終的な性能は劣っているものの、Freeway の学習初期段階から高スコアを獲得可能となる結果が見られた。
+
+### 考察
+
+- EMA-Based Policy Shifting が、スコアが停滞しやすい学習初期において探索を強める挙動が確認できた
+- その後の活用フェーズについては安定性に懸念が残るものの学習は進んでおり、EMA のスパン調整をはじめとした追加検証が必要である
+
+---
+
+## 4. リプレイサンプリング戦略 (Replay Sampling Strategies)
 
 これらの手法は学習データの分布を変化させるため、広義の内発的動機付けとみなすことができる。
 
-### 3.1 Curious Replay（サンプリング戦略のベースライン）
+### 4.1 Curious Replay（サンプリング戦略のベースライン）
 
 **スクリプト:**
 - [`exp_script/251229_run_mspackman_curious.sh`](exp_script/251229_run_mspackman_curious.sh)
@@ -170,7 +228,7 @@ priority = c × β^visit_count + (model_loss + ε)^α
 - Curious Replay の論文を再現することができた
 - 大差ではないため、複数 seed での実験を行うべき
 
-### 3.2 Curious Replay（エントロピー調整）
+### 4.2 Curious Replay（エントロピー調整）
 
 エントロピー調整（`H(stoch)`）を有効にした Curious Replay の比較結果である。
 
@@ -206,17 +264,18 @@ priority = c × β^visit_count + (adjusted_loss + ε)^α
 - 確率的状態のエントロピー（H(stoch)）は、特に序盤では未学習を表す可能性がある
 - そのような未学習な状態の学習を抑制してしまった可能性がある
 
-### 3.3 探索/活用バランシング (TrendMixture)
+### 4.3 探索/活用バランシング (TrendMix)
+
+> 📄 **本手法は論文で報告する提案手法である。**
 
 報酬のトレンドに基づいて探索と活用をバランスさせる手法である。
 
 **スクリプト:**
-- [`exp_script/260104_run_mspackman_trendmix_multi.sh`](exp_script/260104_run_mspackman_trendmix_multi.sh)
-- [`exp_script/260105_run_mspackman_trendmix_multi.sh`](exp_script/260105_run_mspackman_trendmix_multi.sh)
-- [`exp_script/260106_run_mspackman_trendmix_multi.sh`](exp_script/260106_run_mspackman_trendmix_multi.sh)
+- [`exp_script/260126_run_mspacman_baseline_vs_trendmix_5seeds.sh`](exp_script/260126_run_mspacman_baseline_vs_trendmix_5seeds.sh)
+- [`exp_script/260207_run_freeway_trendmix_5seeds.sh`](exp_script/260207_run_freeway_trendmix_5seeds.sh)
 
 **実装:**
-- [`embodied/core/selectors.py`](embodied/core/selectors.py) - `TrendMixture` クラス
+- [`embodied/core/selectors.py`](embodied/core/selectors.py) - `TrendMix` クラス
 - [`embodied/core/replay.py`](embodied/core/replay.py) - `_update_trend` メソッド
 - [`dreamerv3/agent.py`](dreamerv3/agent.py) - 優先度計算（KL divergence）
 
@@ -249,7 +308,15 @@ exploit_frac = trend_total × gate
 
 #### 結果
 
-![TrendMixture](./assets/mspackman_trendmix.png)
+5 seed での実験結果を以下に示す。
+
+##### Ms. Pac-Man
+
+![TrendMix (Ms. Pac-Man)](./assets/mspackman_trendmix_5seed.png)
+
+##### Freeway
+
+![TrendMix (Freeway)](./assets/freeway_trendmix_5seed.png)
 
 #### 考察
 
